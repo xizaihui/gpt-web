@@ -5,13 +5,14 @@ import {
   fetchPoolStats, fetchPoolAccounts, syncPool,
   removePoolAccount, updatePoolAccount, refreshPoolAccount,
   refreshAllPoolAccounts, startOAuth, completeOAuth,
-  fetchAllQuotas,
+  fetchAllQuotas, fetchProxies,
 } from '@/api'
 
 // ── State ──
 const stats = ref({ total: 0, active: 0, expired: 0, error: 0, disabled: 0 })
 const accounts = ref<any[]>([])
 const quotas = ref<Record<string, any>>({})
+const proxies = ref<any[]>([])
 const loading = ref(false)
 const quotaLoading = ref(false)
 const oauthUrl = ref('')
@@ -19,16 +20,16 @@ const oauthState = ref('')
 const showOAuthDialog = ref(false)
 const pasteUrl = ref('')
 const oauthLoading = ref(false)
-const editProxy = ref<{ id: string; proxy: string } | null>(null)
 const expandedId = ref<string | null>(null)
 
 // ── Load ──
 async function loadData() {
   loading.value = true
   try {
-    const [s, a] = await Promise.all([fetchPoolStats(), fetchPoolAccounts()])
+    const [s, a, p] = await Promise.all([fetchPoolStats(), fetchPoolAccounts(), fetchProxies()])
     stats.value = s
     accounts.value = a
+    proxies.value = p
   } catch {}
   loading.value = false
 }
@@ -336,15 +337,14 @@ function textColor(p: number) {
                   <div class="detail-row">
                     <span class="detail-label">代理</span>
                     <div class="flex items-center gap-1.5">
-                      <template v-if="editProxy?.id === acc.id">
-                        <input v-model="editProxy.proxy" class="text-xs px-2 py-1 border border-[#d4d4d8] rounded-md w-48 outline-none focus:border-[#18181b]" placeholder="socks5://user:pass@host:port" @keyup.enter="handleSaveProxy(acc.id, editProxy!.proxy)" />
-                        <button class="text-[11px] text-blue-600 hover:text-blue-800" @click="handleSaveProxy(acc.id, editProxy!.proxy)">保存</button>
-                        <button class="text-[11px] text-[#a1a1aa]" @click="editProxy = null">取消</button>
-                      </template>
-                      <template v-else>
-                        <span class="detail-value font-mono">{{ acc.proxy || '无' }}</span>
-                        <button class="text-[11px] text-blue-600 hover:text-blue-800" @click="editProxy = { id: acc.id, proxy: acc.proxy || '' }">编辑</button>
-                      </template>
+                      <select
+                        class="text-xs border border-[#d4d4d8] rounded-md px-2 py-1 bg-white text-[#52525b] outline-none focus:border-[#18181b] cursor-pointer min-w-[140px]"
+                        :value="acc.proxy || ''"
+                        @change="handleSaveProxy(acc.id, ($event.target as HTMLSelectElement).value || '')"
+                      >
+                        <option value="">直连（无代理）</option>
+                        <option v-for="p in proxies.filter(px => px.status !== 'disabled')" :key="p.id" :value="p.id">{{ p.name }}</option>
+                      </select>
                     </div>
                   </div>
                   <div v-if="acc.lastError" class="detail-row">

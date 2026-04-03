@@ -11,6 +11,7 @@ import {
   syncFromOpenClaw, refreshAccount, refreshAllAccounts, getPoolStats,
   startOAuthFlow, completeOAuthFlow,
   queryAccountQuota, queryAllQuotas,
+  listProxies, addProxy, removeProxy, updateProxy, testProxy,
 } from './codex'
 
 const app = express()
@@ -410,6 +411,56 @@ router.get('/codex/pool/quotas', auth, async (_req, res) => {
   try {
     const quotas = await queryAllQuotas()
     res.json({ status: 'Success', data: quotas })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// ---- Proxy Management ----
+
+router.get('/codex/proxies', auth, async (_req, res) => {
+  try {
+    res.json({ status: 'Success', data: listProxies() })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+router.post('/codex/proxies', auth, async (req, res) => {
+  try {
+    const { name, url } = req.body
+    if (!name || !url) throw new Error('name and url required')
+    const proxy = addProxy(name, url)
+    res.json({ status: 'Success', data: proxy })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+router.patch('/codex/proxies/:id', auth, async (req, res) => {
+  try {
+    const ok = updateProxy(req.params.id, req.body)
+    if (!ok) throw new Error('Proxy not found')
+    res.json({ status: 'Success', data: null })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+router.delete('/codex/proxies/:id', auth, async (req, res) => {
+  try {
+    const ok = removeProxy(req.params.id)
+    if (!ok) throw new Error('Proxy not found')
+    res.json({ status: 'Success', data: null })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+router.post('/codex/proxies/:id/test', auth, async (req, res) => {
+  try {
+    const result = await testProxy(req.params.id)
+    res.json({ status: 'Success', data: result })
   } catch (e: any) {
     res.json({ status: 'Fail', message: e.message, data: null })
   }

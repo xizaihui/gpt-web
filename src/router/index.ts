@@ -30,6 +30,11 @@ const routes: RouteRecordRaw[] = [
         name: 'AdminPool',
         component: () => import('@/views/admin/Pool.vue'),
       },
+      {
+        path: 'proxies',
+        name: 'AdminProxies',
+        component: () => import('@/views/admin/Proxies.vue'),
+      },
     ],
   },
 

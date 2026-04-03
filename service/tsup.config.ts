@@ -10,5 +10,5 @@ export default defineConfig({
   minify: false,
   shims: true,
   dts: false,
-  external: ['better-sqlite3'],
+  external: ['better-sqlite3', 'undici'],
 })

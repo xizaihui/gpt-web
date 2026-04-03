@@ -156,6 +156,28 @@ export function fetchAllQuotas(): Promise<any[]> {
   return apiGet('/codex/pool/quotas')
 }
 
+// ---- Proxy Management API ----
+
+export function fetchProxies(): Promise<any[]> {
+  return apiGet('/codex/proxies')
+}
+
+export function createProxy(name: string, url: string): Promise<any> {
+  return apiPost('/codex/proxies', { name, url })
+}
+
+export function updateProxyConfig(id: string, data: { name?: string; url?: string; status?: string }): Promise<void> {
+  return apiPatch(`/codex/proxies/${encodeURIComponent(id)}`, data)
+}
+
+export function deleteProxy(id: string): Promise<void> {
+  return apiDelete(`/codex/proxies/${encodeURIComponent(id)}`)
+}
+
+export function testProxyConnection(id: string): Promise<{ success: boolean; ip?: string; latency?: number; error?: string }> {
+  return apiPost(`/codex/proxies/${encodeURIComponent(id)}/test`)
+}
+
 export function fetchChatAPI<T = any>(
   prompt: string,
   options?: { conversationId?: string; parentMessageId?: string },

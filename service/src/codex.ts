@@ -5,7 +5,7 @@
  * - Multi-account OAuth token pool with round-robin load balancing
  * - Auto token refresh (refresh_token grant)
  * - JWT decode for account metadata (plan, email, accountId)
- * - Per-account SOCKS5 proxy support
+ * - Per-account proxy support (HTTP/HTTPS/SOCKS5)
  * - Usage tracking (request count, last used time, errors)
  * - OAuth authorization flow (PKCE) for adding new accounts
  */
@@ -13,6 +13,7 @@ import fs from 'fs'
 import path from 'path'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
+import { ProxyAgent, fetch as undiciFetch } from 'undici'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '..', 'data')
@@ -33,6 +34,138 @@ const TOKEN_URL = 'https://auth.openai.com/oauth/token'
 const SCOPE = 'openid profile email offline_access'
 const TOKEN_REFRESH_BUFFER = 30 * 60 * 1000 // refresh 30 min before expiry
 
+// ── Proxy-aware fetch ──
+// Supports http://, https://, socks5:// (via undici ProxyAgent)
+// For socks5, undici ProxyAgent handles it natively in v8+
+function proxyFetch(url: string | URL, init?: RequestInit & { proxy?: string }): Promise<Response> {
+  const proxyUrl = init?.proxy
+  if (!proxyUrl) {
+    return fetch(url, init as any)
+  }
+  
+  // Use undici fetch with ProxyAgent for proxied requests
+  const dispatcher = new ProxyAgent({ uri: proxyUrl })
+  const { proxy: _, ...rest } = init || {}
+  return undiciFetch(url as any, { ...rest, dispatcher } as any) as unknown as Promise<Response>
+}
+
+// ── Proxy pool management ──
+export interface ProxyConfig {
+  id: string
+  name: string          // display name
+  url: string           // socks5://user:pass@host:port or http://...
+  status: 'active' | 'error' | 'disabled'
+  addedAt: number
+  lastTestedAt: number
+  lastError?: string
+}
+
+interface ProxyStore {
+  proxies: ProxyConfig[]
+  lastUpdated: number
+}
+
+const PROXY_FILE = path.join(DATA_DIR, 'codex-proxies.json')
+
+function loadProxies(): ProxyStore {
+  try {
+    if (fs.existsSync(PROXY_FILE)) {
+      return JSON.parse(fs.readFileSync(PROXY_FILE, 'utf-8'))
+    }
+  } catch {}
+  return { proxies: [], lastUpdated: 0 }
+}
+
+function saveProxies(store: ProxyStore): void {
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+  store.lastUpdated = Date.now()
+  fs.writeFileSync(PROXY_FILE, JSON.stringify(store, null, 2))
+}
+
+export function listProxies(): ProxyConfig[] {
+  return loadProxies().proxies
+}
+
+export function addProxy(name: string, url: string): ProxyConfig {
+  const store = loadProxies()
+  const existing = store.proxies.findIndex(p => p.url === url)
+  const proxy: ProxyConfig = {
+    id: existing >= 0 ? store.proxies[existing].id : crypto.randomUUID(),
+    name, url,
+    status: 'active',
+    addedAt: existing >= 0 ? store.proxies[existing].addedAt : Date.now(),
+    lastTestedAt: 0,
+  }
+  if (existing >= 0) store.proxies[existing] = proxy
+  else store.proxies.push(proxy)
+  saveProxies(store)
+  return proxy
+}
+
+export function removeProxy(id: string): boolean {
+  const store = loadProxies()
+  const before = store.proxies.length
+  store.proxies = store.proxies.filter(p => p.id !== id)
+  if (store.proxies.length < before) {
+    // Clear proxy from accounts that used this proxy
+    const pool = loadPool()
+    const proxy = store.proxies.find(p => p.id === id)
+    for (const acc of pool.accounts) {
+      if (acc.proxy === id) acc.proxy = undefined
+    }
+    savePool(pool)
+    saveProxies(store)
+    return true
+  }
+  return false
+}
+
+export function updateProxy(id: string, updates: { name?: string; url?: string; status?: 'active' | 'disabled' }): boolean {
+  const store = loadProxies()
+  const proxy = store.proxies.find(p => p.id === id)
+  if (!proxy) return false
+  if (updates.name !== undefined) proxy.name = updates.name
+  if (updates.url !== undefined) proxy.url = updates.url
+  if (updates.status !== undefined) proxy.status = updates.status
+  saveProxies(store)
+  return true
+}
+
+export async function testProxy(id: string): Promise<{ success: boolean; ip?: string; latency?: number; error?: string }> {
+  const store = loadProxies()
+  const proxy = store.proxies.find(p => p.id === id)
+  if (!proxy) return { success: false, error: 'Proxy not found' }
+
+  const start = Date.now()
+  try {
+    const resp = await proxyFetch('https://api.ipify.org?format=json', {
+      proxy: proxy.url,
+      headers: { 'Accept': 'application/json' },
+    } as any)
+    const data: any = await resp.json()
+    const latency = Date.now() - start
+    proxy.status = 'active'
+    proxy.lastTestedAt = Date.now()
+    proxy.lastError = undefined
+    saveProxies(store)
+    return { success: true, ip: data.ip, latency }
+  } catch (e: any) {
+    proxy.status = 'error'
+    proxy.lastTestedAt = Date.now()
+    proxy.lastError = e.message
+    saveProxies(store)
+    return { success: false, error: e.message }
+  }
+}
+
+/** Get proxy URL by id, returns undefined if not found or disabled */
+function getProxyUrl(proxyId?: string): string | undefined {
+  if (!proxyId) return undefined
+  const store = loadProxies()
+  const proxy = store.proxies.find(p => p.id === proxyId && p.status === 'active')
+  return proxy?.url
+}
+
 // ── Types ──
 export interface CodexAccount {
   id: string                    // unique id (uuid)
@@ -44,7 +177,7 @@ export interface CodexAccount {
   userId: string                // chatgpt_user_id from JWT
   plan: string                  // plus / pro / free
   status: 'active' | 'expired' | 'error' | 'disabled' // account status
-  proxy?: string                // socks5://user:pass@host:port (optional)
+  proxy?: string                // proxy config ID (references ProxyConfig.id)
   addedAt: number               // when added (ms timestamp)
   lastUsedAt: number            // last API call (ms timestamp)
   lastRefreshedAt: number       // last token refresh (ms timestamp)
@@ -105,20 +238,21 @@ function savePool(pool: PoolStore): void {
 }
 
 // ── Token Refresh ──
-async function refreshAccessToken(refreshToken: string, proxy?: string): Promise<{
+async function refreshAccessToken(refreshToken: string, proxyId?: string): Promise<{
   success: boolean; access?: string; refresh?: string; expires?: number; error?: string
 }> {
   try {
-    // TODO: proxy support via socks5 agent
-    const response = await fetch(TOKEN_URL, {
+    const proxyUrl = getProxyUrl(proxyId)
+    const response = await proxyFetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
         grant_type: 'refresh_token',
         refresh_token: refreshToken,
         client_id: CLIENT_ID,
-      }),
-    })
+      }).toString(),
+      proxy: proxyUrl,
+    } as any)
     if (!response.ok) {
       const text = await response.text().catch(() => '')
       return { success: false, error: `Refresh failed (${response.status}): ${text}` }
@@ -425,7 +559,8 @@ export async function completeOAuthFlow(code: string, state: string, proxy?: str
   pendingAuths.delete(state)
 
   try {
-    const response = await fetch(TOKEN_URL, {
+    const proxyUrl = proxy ? getProxyUrl(proxy) || proxy : undefined
+    const response = await proxyFetch(TOKEN_URL, {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -434,8 +569,9 @@ export async function completeOAuthFlow(code: string, state: string, proxy?: str
         code,
         code_verifier: pending.verifier,
         redirect_uri: pending.redirectUri,
-      }),
-    })
+      }).toString(),
+      proxy: proxyUrl,
+    } as any)
 
     if (!response.ok) {
       const text = await response.text().catch(() => '')
@@ -511,8 +647,9 @@ export async function chatWithCodex(
   console.log(`[CodexPool] POST ${url} | model: ${model} | account: ${account.email} | input: ${input.length} msgs`)
 
   try {
-    // TODO: proxy support via socks5 agent when account.proxy is set
-    const response = await fetch(url, {
+    const proxyUrl = getProxyUrl(account.proxy)
+    if (proxyUrl) console.log(`[CodexPool] Using proxy for ${account.email}`)
+    const response = await proxyFetch(url, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -521,7 +658,8 @@ export async function chatWithCodex(
         'chatgpt-account-id': account.accountId,
       },
       body: JSON.stringify(requestBody),
-    })
+      proxy: proxyUrl,
+    } as any)
 
     if (!response.ok) {
       const errorText = await response.text()
@@ -651,8 +789,8 @@ export async function queryAccountQuota(accountId: string): Promise<AccountQuota
 
   try {
     // Make a minimal request to get the x-codex-* headers
-    const controller = new AbortController()
-    const response = await fetch(`${CODEX_BASE_URL}${CODEX_ENDPOINT}`, {
+    const proxyUrl = getProxyUrl(account.proxy)
+    const response = await proxyFetch(`${CODEX_BASE_URL}${CODEX_ENDPOINT}`, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
@@ -667,8 +805,8 @@ export async function queryAccountQuota(accountId: string): Promise<AccountQuota
         store: false,
         stream: true,
       }),
-      signal: controller.signal,
-    })
+      proxy: proxyUrl,
+    } as any)
 
     if (!response.ok) {
       return {
