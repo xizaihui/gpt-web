@@ -8,12 +8,6 @@ const MODEL_GROUPS = [
     models: [
       { label: 'GPT-5.4 (订阅)', value: 'codex:gpt-5.4' },
       { label: 'GPT-5.4 Mini (订阅)', value: 'codex:gpt-5.4-mini' },
-      { label: 'GPT-5.3 Codex (订阅)', value: 'codex:gpt-5.3-codex' },
-      { label: 'GPT-5.2 (订阅)', value: 'codex:gpt-5.2' },
-      { label: 'GPT-5.2 Codex (订阅)', value: 'codex:gpt-5.2-codex' },
-      { label: 'GPT-5.1 (订阅)', value: 'codex:gpt-5.1' },
-      { label: 'GPT-5.1 Max (订阅)', value: 'codex:gpt-5.1-codex-max' },
-      { label: 'GPT-5.1 Mini (订阅)', value: 'codex:gpt-5.1-codex-mini' },
     ],
   },
   {

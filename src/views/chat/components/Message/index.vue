@@ -86,9 +86,11 @@ const cacheWriteTokens = computed(() => {
     <div v-else class="flex gap-3">
       <AvatarComponent :image="false" class="mt-1 flex-shrink-0" />
       <div class="min-w-0 flex-1">
-        <!-- Typing indicator -->
-        <div v-if="loading && (!text || text.trim() === '') && !reasoning" class="typing-indicator flex items-center gap-1 py-2">
-          <span class="dot" /><span class="dot" /><span class="dot" />
+        <!-- Typing indicator — OpenAI shimmer style -->
+        <div v-if="loading && (!text || text.trim() === '') && !reasoning" class="py-1">
+          <div class="shimmer-line h-[14px] w-32 rounded-md" />
+          <div class="shimmer-line h-[14px] w-48 rounded-md mt-2" />
+          <div class="shimmer-line h-[14px] w-24 rounded-md mt-2" />
         </div>
         <!-- Reasoning / Thinking block -->
         <div v-if="reasoning" class="mb-3">
@@ -155,15 +157,13 @@ const cacheWriteTokens = computed(() => {
 .action-btn {
   @apply p-1 text-[#888] transition-colors hover:text-[#0d0d0d];
 }
-.typing-indicator .dot {
-  @apply inline-block h-2 w-2 rounded-full bg-[#999];
-  animation: typing-bounce 1.4s ease-in-out infinite both;
+.shimmer-line {
+  background: linear-gradient(90deg, #e8e8e8 25%, #f4f4f4 50%, #e8e8e8 75%);
+  background-size: 200% 100%;
+  animation: shimmer 1.5s ease-in-out infinite;
 }
-.typing-indicator .dot:nth-child(1) { animation-delay: 0s; }
-.typing-indicator .dot:nth-child(2) { animation-delay: 0.16s; }
-.typing-indicator .dot:nth-child(3) { animation-delay: 0.32s; }
-@keyframes typing-bounce {
-  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
-  40% { transform: scale(1); opacity: 1; }
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
 }
 </style>

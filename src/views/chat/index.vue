@@ -566,6 +566,13 @@ onMounted(async () => {
   // Load messages for active conversation
   if (chatStore.active) {
     await chatStore.loadMessages(chatStore.active)
+    // Clear stale loading states from interrupted sessions
+    const msgs = chatStore.getChatByUuid(chatStore.active)
+    msgs.forEach((msg, idx) => {
+      if (msg.loading) {
+        updateChatSome(chatStore.active!, idx, { loading: false })
+      }
+    })
   }
   scrollToBottom()
 })
