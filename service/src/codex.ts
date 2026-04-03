@@ -732,6 +732,9 @@ export async function chatWithCodex(
 
             if (eventType === 'response.created' && parsed.response) {
               responseModel = parsed.response.model || model
+              if (reasoning && reasoning !== 'none') {
+                responseModel += '-thinking'
+              }
             }
 
             // Check for usage limit
