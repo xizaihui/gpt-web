@@ -21,11 +21,6 @@ const codexModels = [
   { id: 'gpt-5.4', name: 'GPT-5.4' },
   { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' },
   { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex' },
-  { id: 'gpt-5.2', name: 'GPT-5.2' },
-  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex' },
-  { id: 'gpt-5.1', name: 'GPT-5.1' },
-  { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Max' },
-  { id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Mini' },
 ]
 
 function openPanel() {
@@ -107,8 +102,8 @@ watch(hasApiConfig, () => {
             </button>
           </div>
 
-          <!-- Scrollable content -->
-          <div class="overflow-y-auto flex-1 px-5 pb-5 min-h-[280px]">
+          <!-- Scrollable content — fixed height so tab switch doesn't jump -->
+          <div class="overflow-y-auto flex-1 px-5 pb-5" style="height: 320px;">
             <!-- API Tab -->
             <div v-if="activeTab === 'api'" class="space-y-4">
               <section>
