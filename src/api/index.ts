@@ -110,18 +110,42 @@ export function importState(state: { history: any[]; chat: any[] }): Promise<{ i
   return apiPost('/conversations/import', state)
 }
 
-// ---- Codex OAuth Token API ----
+// ---- Codex Account Pool API ----
 
-export function fetchCodexTokens(): Promise<Array<{ email: string; active: boolean; expiresAt: string; expiresIn: string }>> {
-  return apiGet('/codex/tokens')
+export function fetchPoolStats(): Promise<{ total: number; active: number; expired: number; error: number; disabled: number }> {
+  return apiGet('/codex/pool/stats')
 }
 
-export function syncCodexTokens(): Promise<{ synced: number }> {
-  return apiPost('/codex/sync')
+export function fetchPoolAccounts(): Promise<any[]> {
+  return apiGet('/codex/pool/accounts')
 }
 
-export function deleteCodexToken(email: string): Promise<void> {
-  return apiDelete(`/codex/tokens/${encodeURIComponent(email)}`)
+export function syncPool(): Promise<{ synced: number }> {
+  return apiPost('/codex/pool/sync')
+}
+
+export function removePoolAccount(id: string): Promise<void> {
+  return apiDelete(`/codex/pool/accounts/${encodeURIComponent(id)}`)
+}
+
+export function updatePoolAccount(id: string, data: { proxy?: string | null; status?: string }): Promise<void> {
+  return apiPatch(`/codex/pool/accounts/${encodeURIComponent(id)}`, data)
+}
+
+export function refreshPoolAccount(id: string): Promise<void> {
+  return apiPost(`/codex/pool/accounts/${encodeURIComponent(id)}/refresh`)
+}
+
+export function refreshAllPoolAccounts(): Promise<{ refreshed: number; failed: number }> {
+  return apiPost('/codex/pool/refresh-all')
+}
+
+export function startOAuth(): Promise<{ authUrl: string; state: string }> {
+  return apiPost('/codex/oauth/start')
+}
+
+export function completeOAuth(code: string, state: string, proxy?: string): Promise<{ email: string; plan: string }> {
+  return apiPost('/codex/oauth/complete', { code, state, proxy })
 }
 
 export function fetchChatAPI<T = any>(

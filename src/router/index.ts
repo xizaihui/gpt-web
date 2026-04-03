@@ -20,6 +20,12 @@ const routes: RouteRecordRaw[] = [
   },
 
   {
+    path: '/admin/pool',
+    name: 'AdminPool',
+    component: () => import('@/views/admin/Pool.vue'),
+  },
+
+  {
     path: '/404',
     name: '404',
     component: () => import('@/views/exception/404/index.vue'),

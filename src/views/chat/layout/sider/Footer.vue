@@ -1,9 +1,11 @@
 <script setup lang='ts'>
 import { ref, watch, onMounted } from 'vue'
+import { useRouter } from 'vue-router'
 import { useSettingStore } from '@/store'
 import Icon from '@/components/common/Icon.vue'
-import { fetchCodexTokens, syncCodexTokens, deleteCodexToken } from '@/api'
+import { fetchPoolStats, fetchPoolAccounts, syncPool } from '@/api'
 
+const router = useRouter()
 const settingStore = useSettingStore()
 const showPanel = ref(false)
 
@@ -15,9 +17,8 @@ const showApiKey = ref(false)
 
 const DEFAULT_URL = import.meta.env.VITE_DEFAULT_API_BASE_URL || ''
 
-// Codex tokens
-const codexTokens = ref<Array<{ email: string; active: boolean; expiresAt: string; expiresIn: string }>>([])
-const codexLoading = ref(false)
+// Pool stats
+const poolStats = ref({ total: 0, active: 0, expired: 0, error: 0, disabled: 0 })
 const activeTab = ref<'api' | 'codex'>('api')
 
 function openPanel() {
@@ -26,7 +27,7 @@ function openPanel() {
   apiKey.value = settingStore.apiKey || ''
   showApiKey.value = false
   showPanel.value = true
-  loadCodexTokens()
+  loadPoolStats()
 }
 
 function closePanel() {
@@ -46,49 +47,29 @@ function saveApiConfig() {
   })
 }
 
-// Codex token management
-async function loadCodexTokens() {
-  try {
-    codexLoading.value = true
-    codexTokens.value = await fetchCodexTokens()
-  }
-  catch { codexTokens.value = [] }
-  finally { codexLoading.value = false }
+async function loadPoolStats() {
+  try { poolStats.value = await fetchPoolStats() }
+  catch { poolStats.value = { total: 0, active: 0, expired: 0, error: 0, disabled: 0 } }
 }
 
-async function handleSyncCodex() {
-  try {
-    codexLoading.value = true
-    await syncCodexTokens()
-    await loadCodexTokens()
-  }
-  catch {}
-  finally { codexLoading.value = false }
-}
-
-async function handleRemoveToken(email: string) {
-  try {
-    await deleteCodexToken(email)
-    await loadCodexTokens()
-  }
-  catch {}
+function goToAdmin() {
+  closePanel()
+  router.push('/admin/pool')
 }
 
 // Status
 const hasApiConfig = ref(false)
-const hasCodexToken = ref(false)
+const hasActivePool = ref(false)
 watch([() => settingStore.apiKey, () => settingStore.apiBaseUrl], () => {
   hasApiConfig.value = !!(settingStore.apiKey && settingStore.apiBaseUrl)
 }, { immediate: true })
-watch(codexTokens, (tokens) => {
-  hasCodexToken.value = tokens.some(t => t.active)
-}, { immediate: true })
+watch(poolStats, (s) => { hasActivePool.value = s.active > 0 }, { immediate: true })
 
 const statusText = ref('')
-watch([hasApiConfig, hasCodexToken], () => {
-  if (hasApiConfig.value && hasCodexToken.value) statusText.value = 'API + 订阅'
+watch([hasApiConfig, hasActivePool], () => {
+  if (hasApiConfig.value && hasActivePool.value) statusText.value = 'API + 订阅'
   else if (hasApiConfig.value) statusText.value = 'API 已配置'
-  else if (hasCodexToken.value) statusText.value = '订阅已授权'
+  else if (hasActivePool.value) statusText.value = `订阅 ${poolStats.value.active} 个账号`
   else statusText.value = '未配置'
 }, { immediate: true })
 </script>
@@ -103,7 +84,7 @@ watch([hasApiConfig, hasCodexToken], () => {
         U
         <div
           class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#f9f9f9]"
-          :class="(hasApiConfig || hasCodexToken) ? 'bg-[#19c37d]' : 'bg-[#f59e0b]'"
+          :class="(hasApiConfig || hasActivePool) ? 'bg-[#19c37d]' : 'bg-[#f59e0b]'"
         />
       </div>
       <div class="flex flex-col min-w-0">
@@ -127,20 +108,12 @@ watch([hasApiConfig, hasCodexToken], () => {
 
           <!-- Tabs -->
           <div class="flex px-5 gap-1 mb-3 flex-shrink-0">
-            <button
-              class="tab-btn"
-              :class="activeTab === 'api' ? 'tab-active' : 'tab-inactive'"
-              @click="activeTab = 'api'"
-            >
+            <button class="tab-btn" :class="activeTab === 'api' ? 'tab-active' : 'tab-inactive'" @click="activeTab = 'api'">
               API 模式
             </button>
-            <button
-              class="tab-btn"
-              :class="activeTab === 'codex' ? 'tab-active' : 'tab-inactive'"
-              @click="activeTab = 'codex'"
-            >
+            <button class="tab-btn" :class="activeTab === 'codex' ? 'tab-active' : 'tab-inactive'" @click="activeTab = 'codex'">
               订阅模式
-              <span v-if="hasCodexToken" class="w-1.5 h-1.5 rounded-full bg-[#19c37d] ml-1" />
+              <span v-if="hasActivePool" class="w-1.5 h-1.5 rounded-full bg-[#19c37d] ml-1" />
             </button>
           </div>
 
@@ -169,48 +142,34 @@ watch([hasApiConfig, hasCodexToken], () => {
             <!-- Codex Tab -->
             <div v-if="activeTab === 'codex'" class="space-y-4">
               <section>
-                <div class="flex items-center justify-between mb-3">
-                  <h3 class="section-title mb-0">ChatGPT 订阅</h3>
-                  <button class="text-xs text-[#0066ff] hover:text-[#0044cc] font-medium transition-colors" @click="handleSyncCodex">
-                    {{ codexLoading ? '同步中...' : '从 OpenClaw 同步' }}
-                  </button>
-                </div>
-
+                <h3 class="section-title">ChatGPT 订阅号池</h3>
                 <p class="text-[11px] text-[#999] mb-3 leading-relaxed">
-                  使用 ChatGPT Plus/Pro 订阅额度，无需 API Key。选择模型 "GPT-5.4 (订阅)" 即可使用。
+                  使用 ChatGPT Plus/Pro 订阅额度调用 GPT-5.4，不消耗 API 余额。
                 </p>
 
-                <!-- Token list -->
-                <div v-if="codexTokens.length > 0" class="space-y-2">
-                  <div
-                    v-for="token in codexTokens"
-                    :key="token.email"
-                    class="flex items-center gap-2 p-2.5 bg-[#f9f9f9] rounded-xl border border-[#e8e8e8]"
-                  >
-                    <div class="w-2 h-2 rounded-full flex-shrink-0" :class="token.active ? 'bg-[#19c37d]' : 'bg-[#e5484d]'" />
-                    <div class="flex-1 min-w-0">
-                      <div class="text-[13px] text-[#0d0d0d] truncate font-medium">{{ token.email }}</div>
-                      <div class="text-[11px] text-[#999]">
-                        {{ token.active ? `剩余 ${token.expiresIn}` : '已过期' }}
-                      </div>
-                    </div>
-                    <button
-                      class="w-6 h-6 flex items-center justify-center rounded-md hover:bg-[#fee2e2] text-[#999] hover:text-[#e5484d] transition-colors flex-shrink-0"
-                      title="移除"
-                      @click="handleRemoveToken(token.email)"
-                    >
-                      <Icon name="x" :size="12" />
-                    </button>
+                <!-- Stats summary -->
+                <div class="grid grid-cols-3 gap-2 mb-3">
+                  <div class="text-center p-2 bg-[#f4f4f4] rounded-lg">
+                    <div class="text-lg font-bold text-green-600">{{ poolStats.active }}</div>
+                    <div class="text-[10px] text-[#999]">活跃</div>
+                  </div>
+                  <div class="text-center p-2 bg-[#f4f4f4] rounded-lg">
+                    <div class="text-lg font-bold text-[#0d0d0d]">{{ poolStats.total }}</div>
+                    <div class="text-[10px] text-[#999]">总计</div>
+                  </div>
+                  <div class="text-center p-2 bg-[#f4f4f4] rounded-lg">
+                    <div class="text-lg font-bold" :class="poolStats.error > 0 ? 'text-orange-500' : 'text-[#ccc]'">{{ poolStats.error + poolStats.expired }}</div>
+                    <div class="text-[10px] text-[#999]">异常</div>
                   </div>
                 </div>
 
-                <div v-else class="text-center py-6">
-                  <div class="text-[#ccc] mb-2">
-                    <Icon name="circle" :size="32" class="mx-auto" />
-                  </div>
-                  <p class="text-xs text-[#999]">暂无已授权的账号</p>
-                  <p class="text-[11px] text-[#bbb] mt-1">点击"从 OpenClaw 同步"导入已有授权</p>
-                </div>
+                <!-- Admin link -->
+                <button
+                  class="w-full py-2.5 text-sm font-medium text-[#0d0d0d] bg-[#f4f4f4] hover:bg-[#e8e8e8] rounded-xl border border-[#e3e3e3] transition-colors"
+                  @click="goToAdmin"
+                >
+                  打开号池管理 →
+                </button>
               </section>
             </div>
 
@@ -245,9 +204,7 @@ watch([hasApiConfig, hasCodexToken], () => {
 </template>
 
 <style scoped>
-.settings-input {
-  @apply w-full px-3 py-2 bg-[#f4f4f4] border border-[#e3e3e3] rounded-xl text-sm text-[#0d0d0d] outline-none transition-colors;
-}
+.settings-input { @apply w-full px-3 py-2 bg-[#f4f4f4] border border-[#e3e3e3] rounded-xl text-sm text-[#0d0d0d] outline-none transition-colors; }
 .settings-input:focus { @apply border-[#999]; }
 .section-title { @apply text-xs font-semibold text-[#999] uppercase tracking-wider mb-3; }
 .field-label { @apply block text-[13px] font-medium text-[#0d0d0d] mb-1.5; }

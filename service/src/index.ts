@@ -6,7 +6,11 @@ import { auth } from './middleware/auth'
 import { limiter } from './middleware/limiter'
 import { isNotEmptyString } from './utils/is'
 import * as storage from './storage'
-import { getAllTokens, syncFromOpenClaw, addToken, removeToken, getActiveTokens } from './codex'
+import {
+  listAccounts, getAccount, addAccount, removeAccount, updateAccount,
+  syncFromOpenClaw, refreshAccount, refreshAllAccounts, getPoolStats,
+  startOAuthFlow, completeOAuthFlow,
+} from './codex'
 
 const app = express()
 const router = express.Router()
@@ -254,46 +258,137 @@ router.post('/conversations/import', auth, async (req, res) => {
   }
 })
 
-// ---- Codex OAuth Token Management ----
+// ---- Codex Account Pool Management ----
 
-// List Codex tokens (masked)
-router.get('/codex/tokens', auth, async (_req, res) => {
+// Pool stats overview
+router.get('/codex/pool/stats', auth, async (_req, res) => {
   try {
-    // Sync from OpenClaw first
-    syncFromOpenClaw()
-    const tokens = getAllTokens()
-    const now = Date.now()
-    const masked = tokens.map(t => ({
-      email: t.email,
-      active: t.expires > now + 5 * 60 * 1000,
-      expiresAt: new Date(t.expires).toISOString(),
-      expiresIn: Math.max(0, Math.floor((t.expires - now) / 1000 / 60)) + ' min',
-    }))
-    res.json({ status: 'Success', data: masked })
+    const stats = getPoolStats()
+    res.json({ status: 'Success', data: stats })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
   }
-  catch (e: any) {
+})
+
+// List all accounts (tokens masked)
+router.get('/codex/pool/accounts', auth, async (_req, res) => {
+  try {
+    const accounts = listAccounts()
+    res.json({ status: 'Success', data: accounts })
+  } catch (e: any) {
     res.json({ status: 'Fail', message: e.message, data: null })
   }
 })
 
 // Sync from OpenClaw
-router.post('/codex/sync', auth, async (_req, res) => {
+router.post('/codex/pool/sync', auth, async (_req, res) => {
   try {
-    const tokens = syncFromOpenClaw()
-    res.json({ status: 'Success', data: { synced: tokens.length } })
-  }
-  catch (e: any) {
+    const count = syncFromOpenClaw()
+    res.json({ status: 'Success', data: { synced: count } })
+  } catch (e: any) {
     res.json({ status: 'Fail', message: e.message, data: null })
   }
 })
 
-// Remove a token
-router.delete('/codex/tokens/:email', auth, async (req, res) => {
+// Remove account
+router.delete('/codex/pool/accounts/:id', auth, async (req, res) => {
   try {
-    removeToken(req.params.email)
+    const ok = removeAccount(req.params.id)
+    if (!ok) throw new Error('Account not found')
     res.json({ status: 'Success', data: null })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
   }
-  catch (e: any) {
+})
+
+// Update account (proxy, status)
+router.patch('/codex/pool/accounts/:id', auth, async (req, res) => {
+  try {
+    const ok = updateAccount(req.params.id, req.body)
+    if (!ok) throw new Error('Account not found')
+    res.json({ status: 'Success', data: null })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// Refresh single account token
+router.post('/codex/pool/accounts/:id/refresh', auth, async (req, res) => {
+  try {
+    const result = await refreshAccount(req.params.id)
+    if (!result.success) throw new Error(result.error)
+    res.json({ status: 'Success', data: null })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// Refresh all account tokens
+router.post('/codex/pool/refresh-all', auth, async (_req, res) => {
+  try {
+    const result = await refreshAllAccounts()
+    res.json({ status: 'Success', data: result })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// Start OAuth authorization flow
+router.post('/codex/oauth/start', auth, async (_req, res) => {
+  try {
+    const result = await startOAuthFlow()
+    res.json({ status: 'Success', data: result })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// OAuth callback (GET - browser redirect from OpenAI)
+router.get('/codex/oauth/callback', async (req, res) => {
+  const { code, state, error } = req.query as Record<string, string>
+  if (error) {
+    res.send(`<html><body><h2>授权失败</h2><p>${error}</p><script>window.close()</script></body></html>`)
+    return
+  }
+  if (!code || !state) {
+    res.send('<html><body><h2>参数缺失</h2><script>window.close()</script></body></html>')
+    return
+  }
+  try {
+    const result = await completeOAuthFlow(code, state)
+    if (result.success && result.account) {
+      res.send(`<html><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f9f9f9">
+        <div style="text-align:center;padding:40px;background:white;border-radius:16px;box-shadow:0 2px 16px rgba(0,0,0,0.08)">
+          <div style="font-size:48px;margin-bottom:16px">✅</div>
+          <h2 style="margin:0 0 8px;color:#0d0d0d">授权成功</h2>
+          <p style="color:#666;margin:0 0 4px">${result.account.email}</p>
+          <p style="color:#999;font-size:14px;margin:0">Plan: ${result.account.plan}</p>
+          <p style="color:#999;font-size:13px;margin:16px 0 0">可以关闭此页面了</p>
+        </div>
+      </body></html>`)
+    } else {
+      res.send(`<html><body style="font-family:system-ui;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;background:#f9f9f9">
+        <div style="text-align:center;padding:40px;background:white;border-radius:16px;box-shadow:0 2px 16px rgba(0,0,0,0.08)">
+          <div style="font-size:48px;margin-bottom:16px">❌</div>
+          <h2 style="margin:0 0 8px;color:#e5484d">授权失败</h2>
+          <p style="color:#666;margin:0">${result.error || 'Unknown error'}</p>
+        </div>
+      </body></html>`)
+    }
+  } catch (e: any) {
+    res.send(`<html><body><h2>Error</h2><p>${e.message}</p></body></html>`)
+  }
+})
+
+// Complete OAuth with manual code paste
+router.post('/codex/oauth/complete', auth, async (req, res) => {
+  try {
+    const { code, state, proxy } = req.body
+    if (!code || !state) throw new Error('Missing code or state')
+    const result = await completeOAuthFlow(code, state, proxy)
+    if (!result.success) throw new Error(result.error)
+    res.json({ status: 'Success', data: { email: result.account?.email, plan: result.account?.plan } })
+  } catch (e: any) {
     res.json({ status: 'Fail', message: e.message, data: null })
   }
 })
