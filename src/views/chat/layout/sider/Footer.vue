@@ -1,11 +1,8 @@
 <script setup lang='ts'>
 import { ref, watch, onMounted } from 'vue'
-import { useRouter } from 'vue-router'
 import { useSettingStore } from '@/store'
 import Icon from '@/components/common/Icon.vue'
-import { fetchPoolStats, fetchPoolAccounts, syncPool } from '@/api'
 
-const router = useRouter()
 const settingStore = useSettingStore()
 const showPanel = ref(false)
 
@@ -18,7 +15,6 @@ const showApiKey = ref(false)
 const DEFAULT_URL = import.meta.env.VITE_DEFAULT_API_BASE_URL || ''
 
 // Pool stats
-const poolStats = ref({ total: 0, active: 0, expired: 0, error: 0, disabled: 0 })
 const activeTab = ref<'api' | 'codex'>('api')
 
 function openPanel() {
@@ -27,7 +23,6 @@ function openPanel() {
   apiKey.value = settingStore.apiKey || ''
   showApiKey.value = false
   showPanel.value = true
-  loadPoolStats()
 }
 
 function closePanel() {
@@ -47,30 +42,15 @@ function saveApiConfig() {
   })
 }
 
-async function loadPoolStats() {
-  try { poolStats.value = await fetchPoolStats() }
-  catch { poolStats.value = { total: 0, active: 0, expired: 0, error: 0, disabled: 0 } }
-}
-
-function goToAdmin() {
-  closePanel()
-  router.push('/admin/pool')
-}
-
 // Status
 const hasApiConfig = ref(false)
-const hasActivePool = ref(false)
 watch([() => settingStore.apiKey, () => settingStore.apiBaseUrl], () => {
   hasApiConfig.value = !!(settingStore.apiKey && settingStore.apiBaseUrl)
 }, { immediate: true })
-watch(poolStats, (s) => { hasActivePool.value = s.active > 0 }, { immediate: true })
 
 const statusText = ref('')
-watch([hasApiConfig, hasActivePool], () => {
-  if (hasApiConfig.value && hasActivePool.value) statusText.value = 'API + 订阅'
-  else if (hasApiConfig.value) statusText.value = 'API 已配置'
-  else if (hasActivePool.value) statusText.value = `订阅 ${poolStats.value.active} 个账号`
-  else statusText.value = '未配置'
+watch(hasApiConfig, () => {
+  statusText.value = hasApiConfig.value ? 'API 已配置' : '未配置'
 }, { immediate: true })
 </script>
 
@@ -84,7 +64,7 @@ watch([hasApiConfig, hasActivePool], () => {
         U
         <div
           class="absolute -bottom-0.5 -right-0.5 w-3 h-3 rounded-full border-2 border-[#f9f9f9]"
-          :class="(hasApiConfig || hasActivePool) ? 'bg-[#19c37d]' : 'bg-[#f59e0b]'"
+          :class="hasApiConfig ? 'bg-[#19c37d]' : 'bg-[#f59e0b]'"
         />
       </div>
       <div class="flex flex-col min-w-0">
@@ -113,7 +93,6 @@ watch([hasApiConfig, hasActivePool], () => {
             </button>
             <button class="tab-btn" :class="activeTab === 'codex' ? 'tab-active' : 'tab-inactive'" @click="activeTab = 'codex'">
               订阅模式
-              <span v-if="hasActivePool" class="w-1.5 h-1.5 rounded-full bg-[#19c37d] ml-1" />
             </button>
           </div>
 
@@ -142,34 +121,13 @@ watch([hasApiConfig, hasActivePool], () => {
             <!-- Codex Tab -->
             <div v-if="activeTab === 'codex'" class="space-y-4">
               <section>
-                <h3 class="section-title">ChatGPT 订阅号池</h3>
-                <p class="text-[11px] text-[#999] mb-3 leading-relaxed">
-                  使用 ChatGPT Plus/Pro 订阅额度调用 GPT-5.4，不消耗 API 余额。
+                <h3 class="section-title">ChatGPT 官方订阅号</h3>
+                <p class="text-[12px] text-[#666] mb-2 leading-relaxed">
+                  体验 ChatGPT Plus/Pro 订阅额度调用 GPT-5.4，不消耗 API 余额。
                 </p>
-
-                <!-- Stats summary -->
-                <div class="grid grid-cols-3 gap-2 mb-3">
-                  <div class="text-center p-2 bg-[#f4f4f4] rounded-lg">
-                    <div class="text-lg font-bold text-green-600">{{ poolStats.active }}</div>
-                    <div class="text-[10px] text-[#999]">活跃</div>
-                  </div>
-                  <div class="text-center p-2 bg-[#f4f4f4] rounded-lg">
-                    <div class="text-lg font-bold text-[#0d0d0d]">{{ poolStats.total }}</div>
-                    <div class="text-[10px] text-[#999]">总计</div>
-                  </div>
-                  <div class="text-center p-2 bg-[#f4f4f4] rounded-lg">
-                    <div class="text-lg font-bold" :class="poolStats.error > 0 ? 'text-orange-500' : 'text-[#ccc]'">{{ poolStats.error + poolStats.expired }}</div>
-                    <div class="text-[10px] text-[#999]">异常</div>
-                  </div>
-                </div>
-
-                <!-- Admin link -->
-                <button
-                  class="w-full py-2.5 text-sm font-medium text-[#0d0d0d] bg-[#f4f4f4] hover:bg-[#e8e8e8] rounded-xl border border-[#e3e3e3] transition-colors"
-                  @click="goToAdmin"
-                >
-                  打开号池管理 →
-                </button>
+                <p class="text-[12px] text-[#666] leading-relaxed">
+                  官方原版订阅号，不降智。
+                </p>
               </section>
             </div>
 
