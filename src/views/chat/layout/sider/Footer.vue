@@ -17,6 +17,17 @@ const DEFAULT_URL = import.meta.env.VITE_DEFAULT_API_BASE_URL || ''
 // Pool stats
 const activeTab = ref<'api' | 'codex'>('api')
 
+const codexModels = [
+  { id: 'gpt-5.4', name: 'GPT-5.4' },
+  { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' },
+  { id: 'gpt-5.3-codex', name: 'GPT-5.3 Codex' },
+  { id: 'gpt-5.2', name: 'GPT-5.2' },
+  { id: 'gpt-5.2-codex', name: 'GPT-5.2 Codex' },
+  { id: 'gpt-5.1', name: 'GPT-5.1' },
+  { id: 'gpt-5.1-codex-max', name: 'GPT-5.1 Max' },
+  { id: 'gpt-5.1-codex-mini', name: 'GPT-5.1 Mini' },
+]
+
 function openPanel() {
   contextRounds.value = settingStore.contextRounds
   apiBaseUrl.value = settingStore.apiBaseUrl || DEFAULT_URL
@@ -97,7 +108,7 @@ watch(hasApiConfig, () => {
           </div>
 
           <!-- Scrollable content -->
-          <div class="overflow-y-auto flex-1 px-5 pb-5">
+          <div class="overflow-y-auto flex-1 px-5 pb-5 min-h-[280px]">
             <!-- API Tab -->
             <div v-if="activeTab === 'api'" class="space-y-4">
               <section>
@@ -122,12 +133,16 @@ watch(hasApiConfig, () => {
             <div v-if="activeTab === 'codex'" class="space-y-4">
               <section>
                 <h3 class="section-title">ChatGPT 官方订阅号</h3>
-                <p class="text-[12px] text-[#666] mb-2 leading-relaxed">
-                  体验 ChatGPT Plus/Pro 订阅额度调用 GPT-5.4，不消耗 API 余额。
+                <p class="text-[12px] text-[#666] mb-3 leading-relaxed">
+                  体验 ChatGPT Plus/Pro 订阅额度调用 GPT-5.4，不消耗 API 余额。官方原版订阅号，不降智。
                 </p>
-                <p class="text-[12px] text-[#666] leading-relaxed">
-                  官方原版订阅号，不降智。
-                </p>
+                <label class="field-label">可用模型</label>
+                <div class="space-y-1">
+                  <div v-for="m in codexModels" :key="m.id" class="flex items-center gap-2 px-3 py-2 bg-[#f4f4f4] rounded-xl">
+                    <span class="w-1.5 h-1.5 rounded-full bg-[#19c37d] flex-shrink-0" />
+                    <span class="text-[13px] text-[#0d0d0d]">{{ m.name }}</span>
+                  </div>
+                </div>
               </section>
             </div>
 
