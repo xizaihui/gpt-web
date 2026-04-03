@@ -5,8 +5,16 @@ import { getClientId } from '@/utils/fingerprint'
 
 // ---- Client ID (browser fingerprint) ----
 let _clientId: string | null = null
+let _clientIdReady: Promise<string> | null = null
+
 // Initialize eagerly — called on module load
-getClientId().then(id => { _clientId = id })
+_clientIdReady = getClientId().then(id => { _clientId = id; return id })
+
+/** Ensure client ID is resolved before first API call */
+async function ensureClientId(): Promise<string> {
+  if (_clientId) return _clientId
+  return _clientIdReady!
+}
 
 // ---- Base URL helper ----
 function apiUrl(path: string): string {
@@ -14,10 +22,10 @@ function apiUrl(path: string): string {
   return `${base}${path}`
 }
 
-function authHeaders(): Record<string, string> {
+async function authHeaders(): Promise<Record<string, string>> {
+  const clientId = await ensureClientId()
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
-  if (_clientId)
-    headers['X-Client-Id'] = _clientId
+  headers['X-Client-Id'] = clientId
   try {
     const authStore = useAuthStore()
     if (authStore.token)
@@ -30,7 +38,7 @@ function authHeaders(): Record<string, string> {
 }
 
 async function apiGet<T = any>(path: string): Promise<T> {
-  const res = await fetch(apiUrl(path), { headers: authHeaders() })
+  const res = await fetch(apiUrl(path), { headers: await authHeaders() })
   const json = await res.json()
   if (json.status !== 'Success') throw new Error(json.message || 'API error')
   return json.data
@@ -39,7 +47,7 @@ async function apiGet<T = any>(path: string): Promise<T> {
 async function apiPost<T = any>(path: string, data?: any): Promise<T> {
   const res = await fetch(apiUrl(path), {
     method: 'POST',
-    headers: authHeaders(),
+    headers: await authHeaders(),
     body: data ? JSON.stringify(data) : undefined,
   })
   const json = await res.json()
@@ -50,7 +58,7 @@ async function apiPost<T = any>(path: string, data?: any): Promise<T> {
 async function apiPut<T = any>(path: string, data?: any): Promise<T> {
   const res = await fetch(apiUrl(path), {
     method: 'PUT',
-    headers: authHeaders(),
+    headers: await authHeaders(),
     body: data ? JSON.stringify(data) : undefined,
   })
   const json = await res.json()
@@ -61,7 +69,7 @@ async function apiPut<T = any>(path: string, data?: any): Promise<T> {
 async function apiPatch<T = any>(path: string, data?: any): Promise<T> {
   const res = await fetch(apiUrl(path), {
     method: 'PATCH',
-    headers: authHeaders(),
+    headers: await authHeaders(),
     body: data ? JSON.stringify(data) : undefined,
   })
   const json = await res.json()
@@ -70,7 +78,7 @@ async function apiPatch<T = any>(path: string, data?: any): Promise<T> {
 }
 
 async function apiDelete<T = any>(path: string): Promise<T> {
-  const res = await fetch(apiUrl(path), { method: 'DELETE', headers: authHeaders() })
+  const res = await fetch(apiUrl(path), { method: 'DELETE', headers: await authHeaders() })
   const json = await res.json()
   if (json.status !== 'Success') throw new Error(json.message || 'API error')
   return json.data
@@ -258,11 +266,11 @@ export async function fetchChatAPIProcess<T = any>(
   const baseUrl = import.meta.env.VITE_GLOB_API_URL || '/api'
   const url = `${baseUrl}/chat-process`
 
+  const clientId = await ensureClientId()
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
-  if (_clientId)
-    headers['X-Client-Id'] = _clientId
+  headers['X-Client-Id'] = clientId
   const token = authStore.token
   if (token)
     headers.Authorization = `Bearer ${token}`
