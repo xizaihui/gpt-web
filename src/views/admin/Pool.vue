@@ -1,16 +1,19 @@
 <script setup lang="ts">
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted } from 'vue'
 import Icon from '@/components/common/Icon.vue'
 import {
   fetchPoolStats, fetchPoolAccounts, syncPool,
   removePoolAccount, updatePoolAccount, refreshPoolAccount,
   refreshAllPoolAccounts, startOAuth, completeOAuth,
+  fetchAllQuotas,
 } from '@/api'
 
 // ── State ──
 const stats = ref({ total: 0, active: 0, expired: 0, error: 0, disabled: 0 })
 const accounts = ref<any[]>([])
+const quotas = ref<Record<string, any>>({}) // keyed by account id
 const loading = ref(false)
+const quotaLoading = ref(false)
 const oauthUrl = ref('')
 const oauthState = ref('')
 const showOAuthDialog = ref(false)
@@ -29,7 +32,21 @@ async function loadData() {
   loading.value = false
 }
 
-onMounted(loadData)
+async function loadQuotas() {
+  quotaLoading.value = true
+  try {
+    const list = await fetchAllQuotas()
+    const map: Record<string, any> = {}
+    for (const q of list) map[q.id] = q
+    quotas.value = map
+  } catch {}
+  quotaLoading.value = false
+}
+
+onMounted(async () => {
+  await loadData()
+  loadQuotas() // load quotas in background (takes a few seconds per account)
+})
 
 // ── Actions ──
 async function handleSync() {
@@ -51,6 +68,10 @@ async function handleRefreshAll() {
     alert(`刷新完成：${result.refreshed} 成功，${result.failed} 失败`)
   } catch (e: any) { alert(e.message) }
   loading.value = false
+}
+
+async function handleRefreshQuotas() {
+  await loadQuotas()
 }
 
 async function handleRefreshOne(id: string) {
@@ -95,46 +116,31 @@ async function handleStartOAuth() {
 }
 
 async function handleCompleteOAuth() {
-  if (!pasteUrl.value.trim()) {
-    alert('请粘贴回调地址')
-    return
-  }
+  if (!pasteUrl.value.trim()) { alert('请粘贴回调地址'); return }
   oauthLoading.value = true
   try {
-    // Extract code and state from pasted URL
     let code = '', state = ''
     try {
       const url = new URL(pasteUrl.value.trim())
       code = url.searchParams.get('code') || ''
       state = url.searchParams.get('state') || ''
     } catch {
-      // Maybe user pasted just the code
       code = pasteUrl.value.trim()
       state = oauthState.value
     }
-
-    if (!code) {
-      alert('无法从粘贴的内容中提取授权码')
-      oauthLoading.value = false
-      return
-    }
-
+    if (!code) { alert('无法从粘贴的内容中提取授权码'); oauthLoading.value = false; return }
     const result = await completeOAuth(code, state || oauthState.value)
     alert(`授权成功！\n账号：${result.email}\n套餐：${result.plan}`)
     showOAuthDialog.value = false
     await loadData()
-  } catch (e: any) {
-    alert(`授权失败：${e.message}`)
-  }
+    loadQuotas()
+  } catch (e: any) { alert(`授权失败：${e.message}`) }
   oauthLoading.value = false
 }
 
-function closeOAuthDialog() {
-  showOAuthDialog.value = false
-  loadData()
-}
+function closeOAuthDialog() { showOAuthDialog.value = false; loadData() }
 
-// ── Computed ──
+// ── Helpers ──
 function statusBadge(status: string) {
   switch (status) {
     case 'active': return { text: '正常', cls: 'bg-green-100 text-green-700' }
@@ -161,6 +167,38 @@ function expiresIn(ts: number) {
   if (diff < 86400000) return `${Math.floor(diff / 3600000)} 小时`
   return `${Math.floor(diff / 86400000)} 天`
 }
+
+function formatResetTime(ts: number) {
+  if (!ts) return '-'
+  const d = new Date(ts)
+  const month = d.getMonth() + 1
+  const day = d.getDate()
+  const hour = d.getHours().toString().padStart(2, '0')
+  const min = d.getMinutes().toString().padStart(2, '0')
+  return `${month}月${day}日 ${hour}:${min}`
+}
+
+function formatResetAfter(seconds: number) {
+  if (!seconds || seconds <= 0) return '-'
+  const h = Math.floor(seconds / 3600)
+  const m = Math.floor((seconds % 3600) / 60)
+  if (h > 24) return `${Math.floor(h / 24)}天${h % 24}小时`
+  if (h > 0) return `${h}小时${m}分`
+  return `${m}分钟`
+}
+
+function usageColor(percent: number) {
+  if (percent < 0) return 'text-gray-400'
+  if (percent <= 30) return 'text-green-600'
+  if (percent <= 70) return 'text-amber-500'
+  return 'text-red-500'
+}
+
+function usageBarColor(percent: number) {
+  if (percent <= 30) return 'bg-green-500'
+  if (percent <= 70) return 'bg-amber-400'
+  return 'bg-red-500'
+}
 </script>
 
 <template>
@@ -178,8 +216,11 @@ function expiresIn(ts: number) {
           <button class="admin-btn btn-secondary" :disabled="loading" @click="handleSync">
             从 OpenClaw 同步
           </button>
+          <button class="admin-btn btn-secondary" :disabled="quotaLoading" @click="handleRefreshQuotas">
+            {{ quotaLoading ? '查询中...' : '刷新配额' }}
+          </button>
           <button class="admin-btn btn-secondary" :disabled="loading" @click="handleRefreshAll">
-            全部刷新
+            全部刷新Token
           </button>
           <button class="admin-btn btn-primary" @click="handleStartOAuth">
             + 添加账号
@@ -232,9 +273,9 @@ function expiresIn(ts: number) {
             class="px-5 py-4 hover:bg-[#fafafa] transition-colors"
           >
             <div class="flex items-start gap-4">
-              <!-- Status dot + email -->
               <div class="flex-1 min-w-0">
-                <div class="flex items-center gap-2 mb-1">
+                <!-- Row 1: Email + badges -->
+                <div class="flex items-center gap-2 mb-2">
                   <span class="font-medium text-[#0d0d0d]">{{ acc.email }}</span>
                   <span class="px-2 py-0.5 text-[11px] font-medium rounded-full" :class="statusBadge(acc.status).cls">
                     {{ statusBadge(acc.status).text }}
@@ -245,24 +286,86 @@ function expiresIn(ts: number) {
                   <span class="text-[11px] text-[#bbb]">{{ acc.source }}</span>
                 </div>
 
-                <!-- Details grid -->
-                <div class="grid grid-cols-4 gap-x-6 gap-y-1 text-xs text-[#999] mt-2">
+                <!-- Row 2: Quota bars -->
+                <div v-if="quotas[acc.id]" class="mb-3 p-3 bg-[#fafafa] rounded-xl border border-[#f0f0f0]">
+                  <div class="grid grid-cols-2 gap-4">
+                    <!-- Daily quota -->
+                    <div>
+                      <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-xs font-medium text-[#666]">⚡ 日配额</span>
+                        <span class="text-xs font-bold tabular-nums" :class="usageColor(quotas[acc.id].primaryUsedPercent)">
+                          {{ quotas[acc.id].primaryUsedPercent >= 0 ? quotas[acc.id].primaryUsedPercent + '%' : '—' }}
+                        </span>
+                      </div>
+                      <div class="w-full h-2 bg-[#e5e5e5] rounded-full overflow-hidden">
+                        <div
+                          class="h-full rounded-full transition-all duration-500"
+                          :class="usageBarColor(quotas[acc.id].primaryUsedPercent)"
+                          :style="{ width: Math.max(0, quotas[acc.id].primaryUsedPercent) + '%' }"
+                        />
+                      </div>
+                      <div class="flex items-center justify-between mt-1">
+                        <span class="text-[10px] text-[#bbb]">
+                          窗口 {{ quotas[acc.id].primaryWindowMinutes / 60 }}小时
+                        </span>
+                        <span class="text-[10px] text-[#bbb]">
+                          {{ formatResetAfter(quotas[acc.id].primaryResetAfterSeconds) }}后重置
+                        </span>
+                      </div>
+                    </div>
+
+                    <!-- Weekly quota -->
+                    <div>
+                      <div class="flex items-center justify-between mb-1.5">
+                        <span class="text-xs font-medium text-[#666]">📊 周配额</span>
+                        <span class="text-xs font-bold tabular-nums" :class="usageColor(quotas[acc.id].secondaryUsedPercent)">
+                          {{ quotas[acc.id].secondaryUsedPercent >= 0 ? quotas[acc.id].secondaryUsedPercent + '%' : '—' }}
+                        </span>
+                      </div>
+                      <div class="w-full h-2 bg-[#e5e5e5] rounded-full overflow-hidden">
+                        <div
+                          class="h-full rounded-full transition-all duration-500"
+                          :class="usageBarColor(quotas[acc.id].secondaryUsedPercent)"
+                          :style="{ width: Math.max(0, quotas[acc.id].secondaryUsedPercent) + '%' }"
+                        />
+                      </div>
+                      <div class="flex items-center justify-between mt-1">
+                        <span class="text-[10px] text-[#bbb]">
+                          窗口 {{ Math.floor(quotas[acc.id].secondaryWindowMinutes / 60 / 24) }}天
+                        </span>
+                        <span class="text-[10px] text-[#bbb]">
+                          {{ formatResetTime(quotas[acc.id].secondaryResetAt) }} 重置
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+                  <!-- Error -->
+                  <div v-if="quotas[acc.id].error" class="mt-2 text-[11px] text-red-400">
+                    配额查询失败: {{ quotas[acc.id].error }}
+                  </div>
+                </div>
+                <div v-else-if="quotaLoading" class="mb-3 p-3 bg-[#fafafa] rounded-xl border border-[#f0f0f0] text-center">
+                  <span class="text-xs text-[#999]">配额查询中...</span>
+                </div>
+
+                <!-- Row 3: Details grid -->
+                <div class="grid grid-cols-4 gap-x-6 gap-y-1 text-xs text-[#999]">
                   <div>
-                    <span class="text-[#bbb]">Token 有效期：</span>
+                    <span class="text-[#bbb]">Token：</span>
                     <span :class="acc.expiresAt > Date.now() ? 'text-green-600' : 'text-red-500'">
                       {{ expiresIn(acc.expiresAt) }}
                     </span>
                   </div>
                   <div>
-                    <span class="text-[#bbb]">请求次数：</span>
+                    <span class="text-[#bbb]">请求：</span>
                     <span>{{ acc.requestCount }}</span>
                   </div>
                   <div>
-                    <span class="text-[#bbb]">错误次数：</span>
+                    <span class="text-[#bbb]">错误：</span>
                     <span :class="acc.errorCount > 0 ? 'text-orange-500' : ''">{{ acc.errorCount }}</span>
                   </div>
                   <div>
-                    <span class="text-[#bbb]">最近使用：</span>
+                    <span class="text-[#bbb]">最近：</span>
                     <span>{{ timeAgo(acc.lastUsedAt) }}</span>
                   </div>
                 </div>
@@ -294,27 +397,11 @@ function expiresIn(ts: number) {
 
               <!-- Actions -->
               <div class="flex items-center gap-1.5 flex-shrink-0">
-                <button
-                  class="action-btn"
-                  title="刷新Token"
-                  @click="handleRefreshOne(acc.id)"
-                >
-                  🔄
-                </button>
-                <button
-                  class="action-btn"
-                  :title="acc.status === 'disabled' ? '启用' : '禁用'"
-                  @click="handleToggle(acc.id, acc.status)"
-                >
+                <button class="action-btn" title="刷新Token" @click="handleRefreshOne(acc.id)">🔄</button>
+                <button class="action-btn" :title="acc.status === 'disabled' ? '启用' : '禁用'" @click="handleToggle(acc.id, acc.status)">
                   {{ acc.status === 'disabled' ? '✅' : '⏸' }}
                 </button>
-                <button
-                  class="action-btn hover:!bg-red-50 hover:!text-red-500"
-                  title="移除"
-                  @click="handleRemove(acc.id, acc.email)"
-                >
-                  🗑
-                </button>
+                <button class="action-btn hover:!bg-red-50 hover:!text-red-500" title="移除" @click="handleRemove(acc.id, acc.email)">🗑</button>
               </div>
             </div>
           </div>
@@ -329,7 +416,6 @@ function expiresIn(ts: number) {
           <div class="px-6 pt-6 pb-4">
             <h3 class="text-lg font-semibold text-[#0d0d0d] mb-4">添加 ChatGPT 账号</h3>
             <div class="space-y-4">
-              <!-- Step 1 -->
               <div class="p-4 bg-blue-50 rounded-xl text-sm text-blue-800 leading-relaxed">
                 <p class="font-medium mb-2">第一步：打开授权链接</p>
                 <p class="text-xs mb-2">复制下方链接到浏览器打开，登录你的 ChatGPT 账号并授权</p>
@@ -343,11 +429,9 @@ function expiresIn(ts: number) {
                   </button>
                 </div>
               </div>
-
-              <!-- Step 2 -->
               <div class="p-4 bg-amber-50 rounded-xl text-sm text-amber-800 leading-relaxed">
                 <p class="font-medium mb-2">第二步：粘贴回调地址</p>
-                <p class="text-xs mb-2">授权后浏览器会跳转到一个 <code class="bg-amber-100 px-1 rounded">localhost:1455</code> 的地址（页面可能报错，这是正常的），复制浏览器地址栏的<strong>完整网址</strong>粘贴到这里：</p>
+                <p class="text-xs mb-2">授权后浏览器会跳转到 <code class="bg-amber-100 px-1 rounded">localhost:1455</code> 的地址（页面可能报错，正常），复制地址栏<strong>完整网址</strong>粘贴到这里：</p>
                 <textarea
                   v-model="pasteUrl"
                   class="w-full h-20 px-3 py-2 text-xs bg-white border border-amber-200 rounded-lg outline-none font-mono resize-none"
@@ -369,25 +453,11 @@ function expiresIn(ts: number) {
 </template>
 
 <style scoped>
-.stat-card {
-  @apply bg-white rounded-xl border border-[#e5e5e5] px-5 py-4 text-center;
-}
-.stat-value {
-  @apply text-2xl font-bold text-[#0d0d0d];
-}
-.stat-label {
-  @apply text-xs text-[#999] mt-1;
-}
-.admin-btn {
-  @apply px-4 py-2 text-sm font-medium rounded-xl transition-colors disabled:opacity-50;
-}
-.btn-primary {
-  @apply bg-[#0d0d0d] text-white hover:bg-[#333];
-}
-.btn-secondary {
-  @apply bg-[#f4f4f4] text-[#0d0d0d] hover:bg-[#e8e8e8] border border-[#e3e3e3];
-}
-.action-btn {
-  @apply w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#f4f4f4] text-sm transition-colors;
-}
+.stat-card { @apply bg-white rounded-xl border border-[#e5e5e5] px-5 py-4 text-center; }
+.stat-value { @apply text-2xl font-bold text-[#0d0d0d]; }
+.stat-label { @apply text-xs text-[#999] mt-1; }
+.admin-btn { @apply px-4 py-2 text-sm font-medium rounded-xl transition-colors disabled:opacity-50; }
+.btn-primary { @apply bg-[#0d0d0d] text-white hover:bg-[#333]; }
+.btn-secondary { @apply bg-[#f4f4f4] text-[#0d0d0d] hover:bg-[#e8e8e8] border border-[#e3e3e3]; }
+.action-btn { @apply w-8 h-8 flex items-center justify-center rounded-lg hover:bg-[#f4f4f4] text-sm transition-colors; }
 </style>

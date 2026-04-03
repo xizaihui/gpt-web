@@ -148,6 +148,14 @@ export function completeOAuth(code: string, state: string, proxy?: string): Prom
   return apiPost('/codex/oauth/complete', { code, state, proxy })
 }
 
+export function fetchAccountQuota(id: string): Promise<any> {
+  return apiGet(`/codex/pool/accounts/${encodeURIComponent(id)}/quota`)
+}
+
+export function fetchAllQuotas(): Promise<any[]> {
+  return apiGet('/codex/pool/quotas')
+}
+
 export function fetchChatAPI<T = any>(
   prompt: string,
   options?: { conversationId?: string; parentMessageId?: string },

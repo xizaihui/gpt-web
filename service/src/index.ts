@@ -10,6 +10,7 @@ import {
   listAccounts, getAccount, addAccount, removeAccount, updateAccount,
   syncFromOpenClaw, refreshAccount, refreshAllAccounts, getPoolStats,
   startOAuthFlow, completeOAuthFlow,
+  queryAccountQuota, queryAllQuotas,
 } from './codex'
 
 const app = express()
@@ -388,6 +389,27 @@ router.post('/codex/oauth/complete', auth, async (req, res) => {
     const result = await completeOAuthFlow(code, state, proxy)
     if (!result.success) throw new Error(result.error)
     res.json({ status: 'Success', data: { email: result.account?.email, plan: result.account?.plan } })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// Query quota for a single account
+router.get('/codex/pool/accounts/:id/quota', auth, async (req, res) => {
+  try {
+    const quota = await queryAccountQuota(req.params.id)
+    if (!quota) throw new Error('Account not found')
+    res.json({ status: 'Success', data: quota })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// Query quota for all accounts
+router.get('/codex/pool/quotas', auth, async (_req, res) => {
+  try {
+    const quotas = await queryAllQuotas()
+    res.json({ status: 'Success', data: quotas })
   } catch (e: any) {
     res.json({ status: 'Fail', message: e.message, data: null })
   }

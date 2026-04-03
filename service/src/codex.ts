@@ -626,6 +626,113 @@ export const CODEX_MODELS = [
   { id: 'codex:gpt-5.4', name: 'GPT-5.4 (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.4' },
 ]
 
+// ── Quota Query ──
+export interface AccountQuota {
+  id: string
+  email: string
+  plan: string
+  primaryUsedPercent: number      // daily used %
+  secondaryUsedPercent: number    // weekly used %
+  primaryWindowMinutes: number    // daily window (minutes)
+  secondaryWindowMinutes: number  // weekly window (minutes)
+  primaryResetAfterSeconds: number
+  secondaryResetAfterSeconds: number
+  primaryResetAt: number          // unix timestamp
+  secondaryResetAt: number        // unix timestamp
+  overSecondaryLimitPercent: number
+  hasCredit: boolean
+  error?: string
+}
+
+export async function queryAccountQuota(accountId: string): Promise<AccountQuota | null> {
+  const pool = loadPool()
+  const account = pool.accounts.find(a => a.id === accountId)
+  if (!account) return null
+
+  try {
+    // Make a minimal request to get the x-codex-* headers
+    const controller = new AbortController()
+    const response = await fetch(`${CODEX_BASE_URL}${CODEX_ENDPOINT}`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${account.accessToken}`,
+        'accept': 'text/event-stream',
+        'chatgpt-account-id': account.accountId,
+      },
+      body: JSON.stringify({
+        model: 'gpt-5.4',
+        instructions: 'Reply with just ok',
+        input: [{ role: 'user', content: 'ping' }],
+        store: false,
+        stream: true,
+      }),
+      signal: controller.signal,
+    })
+
+    if (!response.ok) {
+      return {
+        id: account.id, email: account.email, plan: account.plan,
+        primaryUsedPercent: -1, secondaryUsedPercent: -1,
+        primaryWindowMinutes: 0, secondaryWindowMinutes: 0,
+        primaryResetAfterSeconds: 0, secondaryResetAfterSeconds: 0,
+        primaryResetAt: 0, secondaryResetAt: 0,
+        overSecondaryLimitPercent: 0, hasCredit: false,
+        error: `API ${response.status}`,
+      }
+    }
+
+    // Extract x-codex-* headers
+    const h = (name: string) => response.headers.get(name) || '0'
+
+    const quota: AccountQuota = {
+      id: account.id,
+      email: account.email,
+      plan: h('x-codex-plan-type') || account.plan,
+      primaryUsedPercent: parseInt(h('x-codex-primary-used-percent')),
+      secondaryUsedPercent: parseInt(h('x-codex-secondary-used-percent')),
+      primaryWindowMinutes: parseInt(h('x-codex-primary-window-minutes')),
+      secondaryWindowMinutes: parseInt(h('x-codex-secondary-window-minutes')),
+      primaryResetAfterSeconds: parseInt(h('x-codex-primary-reset-after-seconds')),
+      secondaryResetAfterSeconds: parseInt(h('x-codex-secondary-reset-after-seconds')),
+      primaryResetAt: parseInt(h('x-codex-primary-reset-at')) * 1000,
+      secondaryResetAt: parseInt(h('x-codex-secondary-reset-at')) * 1000,
+      overSecondaryLimitPercent: parseInt(h('x-codex-primary-over-secondary-limit-percent')),
+      hasCredit: h('x-codex-credits-has-credit').toLowerCase() === 'true',
+    }
+
+    // Consume and discard the stream body so connection closes cleanly
+    try {
+      const reader = response.body as any
+      if (reader) for await (const _ of reader) { /* drain */ }
+    } catch { /* ignore */ }
+
+    console.log(`[CodexPool] Quota for ${account.email}: daily ${quota.primaryUsedPercent}%, weekly ${quota.secondaryUsedPercent}%`)
+    return quota
+  } catch (e: any) {
+    return {
+      id: account.id, email: account.email, plan: account.plan,
+      primaryUsedPercent: -1, secondaryUsedPercent: -1,
+      primaryWindowMinutes: 0, secondaryWindowMinutes: 0,
+      primaryResetAfterSeconds: 0, secondaryResetAfterSeconds: 0,
+      primaryResetAt: 0, secondaryResetAt: 0,
+      overSecondaryLimitPercent: 0, hasCredit: false,
+      error: e.message,
+    }
+  }
+}
+
+export async function queryAllQuotas(): Promise<AccountQuota[]> {
+  const pool = loadPool()
+  const results: AccountQuota[] = []
+  for (const account of pool.accounts) {
+    if (account.status === 'disabled') continue
+    const quota = await queryAccountQuota(account.id)
+    if (quota) results.push(quota)
+  }
+  return results
+}
+
 // ── Auto-init: sync from OpenClaw + schedule refresh ──
 syncFromOpenClaw()
 
