@@ -378,7 +378,7 @@ async function chatWithOpenAI(
 
 // ─── Main entry point ─────────────────────────────────────────────────
 async function chatReplyProcess(options: RequestOptions) {
-  const { message, lastContext, process: onProgress, systemMessage, temperature, top_p, model: requestModel, apiBaseUrl: reqBaseUrl, apiKey: reqApiKey, files, history } = options as any
+  const { message, lastContext, process: onProgress, systemMessage, temperature, top_p, model: requestModel, apiBaseUrl: reqBaseUrl, apiKey: reqApiKey, files, history, reasoning } = options as any
   try {
     const useModel = requestModel || DEFAULT_MODEL
     const isCodex = useModel && useModel.startsWith('codex:')
@@ -389,7 +389,7 @@ async function chatReplyProcess(options: RequestOptions) {
     if (isCodex) {
       // Route to Codex (ChatGPT subscription) API
       const codexModel = CODEX_MODELS.find(m => m.id === useModel)?.codexModel || 'gpt-5.4'
-      const result = await chatWithCodex(codexModel, systemMessage, history, message, onProgress)
+      const result = await chatWithCodex(codexModel, systemMessage, history, message, onProgress, reasoning)
       if (!result.success) {
         return sendResponse({ type: 'Fail', message: result.error || 'Codex API error' })
       }

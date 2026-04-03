@@ -109,7 +109,6 @@ export function removeProxy(id: string): boolean {
   if (store.proxies.length < before) {
     // Clear proxy from accounts that used this proxy
     const pool = loadPool()
-    const proxy = store.proxies.find(p => p.id === id)
     for (const acc of pool.accounts) {
       if (acc.proxy === id) acc.proxy = undefined
     }
@@ -620,6 +619,7 @@ export async function chatWithCodex(
   history: Array<{ role: string; content: string }> | undefined,
   message: string,
   onProgress: ((data: any) => void) | undefined,
+  reasoning?: string, // 'high' | 'medium' | 'low' | undefined
 ): Promise<{ success: boolean; error?: string }> {
   const account = getNextAccount()
   if (!account) {
@@ -641,6 +641,11 @@ export async function chatWithCodex(
     input,
     store: false,
     stream: true,
+  }
+
+  // Add reasoning if enabled
+  if (reasoning && reasoning !== 'none') {
+    requestBody.reasoning = { effort: reasoning, summary: 'auto' }
   }
 
   const url = `${CODEX_BASE_URL}${CODEX_ENDPOINT}`
@@ -670,7 +675,7 @@ export async function chatWithCodex(
         // Try to auto-refresh and retry once
         const refreshResult = await refreshAccount(account.id)
         if (refreshResult.success) {
-          return chatWithCodex(model, systemMessage, history, message, onProgress)
+          return chatWithCodex(model, systemMessage, history, message, onProgress, reasoning)
         }
         return { success: false, error: `OAuth 令牌已过期 (${account.email})，刷新失败` }
       }
@@ -680,6 +685,7 @@ export async function chatWithCodex(
     const reader = response.body as any
     const decoder = new TextDecoder()
     let fullText = ''
+    let reasoningText = ''
     let buffer = ''
     let responseModel = model
     let finalUsage: any = null
@@ -704,6 +710,20 @@ export async function chatWithCodex(
               onProgress?.({
                 id: parsed.item_id || 'msg',
                 text: fullText,
+                reasoning: reasoningText || undefined,
+                role: 'assistant',
+                model: responseModel,
+                detail: parsed,
+              })
+            }
+
+            // Capture reasoning summary text (thinking)
+            if (eventType === 'response.reasoning_summary_text.delta' && parsed.delta) {
+              reasoningText += parsed.delta
+              onProgress?.({
+                id: parsed.item_id || 'reasoning',
+                text: fullText,
+                reasoning: reasoningText,
                 role: 'assistant',
                 model: responseModel,
                 detail: parsed,
@@ -762,6 +782,13 @@ export async function chatWithCodex(
 // ── Available Codex models ──
 export const CODEX_MODELS = [
   { id: 'codex:gpt-5.4', name: 'GPT-5.4 (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.4' },
+  { id: 'codex:gpt-5.4-mini', name: 'GPT-5.4 Mini (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.4-mini' },
+  { id: 'codex:gpt-5.3-codex', name: 'GPT-5.3 Codex (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.3-codex' },
+  { id: 'codex:gpt-5.2', name: 'GPT-5.2 (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.2' },
+  { id: 'codex:gpt-5.2-codex', name: 'GPT-5.2 Codex (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.2-codex' },
+  { id: 'codex:gpt-5.1', name: 'GPT-5.1 (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.1' },
+  { id: 'codex:gpt-5.1-codex-max', name: 'GPT-5.1 Max (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.1-codex-max' },
+  { id: 'codex:gpt-5.1-codex-mini', name: 'GPT-5.1 Mini (订阅)', provider: 'ChatGPT Plus', codexModel: 'gpt-5.1-codex-mini' },
 ]
 
 // ── Quota Query ──

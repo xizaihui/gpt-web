@@ -53,6 +53,9 @@ interface AttachedFile {
 
 const attachedFiles = ref<AttachedFile[]>([])
 const showAttachMenu = ref(false)
+
+// Thinking / Reasoning toggle
+const thinkingEnabled = ref(false)
 const showRecentSubmenu = ref(false)
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
@@ -301,6 +304,7 @@ async function streamChat(
     files,
     signal: controller.signal,
     history,
+    reasoning: thinkingEnabled.value ? 'high' : undefined,
     onProgress: (data) => {
       waitingForFirstToken.value = false
       const responseModel = data.detail?.model || data.model || selectedModel.value
@@ -313,6 +317,9 @@ async function streamChat(
         model: responseModel,
         conversationOptions: { conversationId: data.conversationId, parentMessageId: data.id },
         requestOptions: { prompt: message, options: { ...options } },
+      }
+      if (data.reasoning) {
+        updateData.reasoning = data.reasoning
       }
       if (data.usage) {
         updateData.usage = data.usage
@@ -614,6 +621,7 @@ onUnmounted(() => {
               :key="`${item.dateTime}-${index}`"
               :date-time="item.dateTime"
               :text="item.text"
+              :reasoning="item.reasoning"
               :inversion="item.inversion"
               :error="item.error"
               :loading="item.loading"
@@ -765,11 +773,24 @@ onUnmounted(() => {
                   </div>
                 </div>
               </div>
-              <!-- 思考 pill (blue) -->
-              <button class="flex items-center gap-1.5 px-2.5 py-1 text-[13px] text-[#0066ff] hover:bg-blue-50 rounded-full transition-colors font-medium">
-                <Icon name="info-circle" :size="14" />
+              <!-- 思考 pill toggle -->
+              <button
+                class="flex items-center gap-1.5 px-2.5 py-1 text-[13px] rounded-full transition-all font-medium"
+                :class="thinkingEnabled
+                  ? 'text-[#0066ff] bg-blue-50 ring-1 ring-blue-200'
+                  : 'text-[#b4b4b4] hover:text-[#666] hover:bg-[#f4f4f4]'"
+                @click="thinkingEnabled = !thinkingEnabled"
+              >
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                  <path d="M12 2a8 8 0 0 0-8 8c0 3.4 2.1 6.3 5 7.4V20a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2.6c2.9-1.1 5-4 5-7.4a8 8 0 0 0-8-8z" />
+                  <line x1="9" y1="23" x2="15" y2="23" />
+                </svg>
                 <span>思考</span>
-                <Icon name="chevron-down" :size="10" :stroke-width="2.5" />
+                <template v-if="thinkingEnabled">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+                    <line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" />
+                  </svg>
+                </template>
               </button>
             </div>
 

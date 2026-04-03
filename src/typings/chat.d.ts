@@ -3,6 +3,7 @@ declare namespace Chat {
 	interface Chat {
 		dateTime: string
 		text: string
+		reasoning?: string
 		inversion?: boolean
 		error?: boolean
 		loading?: boolean

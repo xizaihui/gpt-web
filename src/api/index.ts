@@ -211,6 +211,7 @@ export async function fetchChatAPIProcess<T = any>(
     apiKey?: string
     files?: Array<{ name: string; type: string; base64: string }>
     history?: Array<{ role: string; content: string }>
+    reasoning?: string  // 'high' | 'medium' | 'low' | undefined
   },
 ): Promise<void> {
   const settingStore = useSettingStore()
@@ -229,6 +230,9 @@ export async function fetchChatAPIProcess<T = any>(
 
   if (params.history && params.history.length > 0)
     data.history = params.history
+
+  if (params.reasoning)
+    data.reasoning = params.reasoning
 
   const apiBaseUrl = params.apiBaseUrl || settingStore.apiBaseUrl
   const apiKey = params.apiKey || settingStore.apiKey
