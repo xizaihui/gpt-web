@@ -20,9 +20,17 @@ const routes: RouteRecordRaw[] = [
   },
 
   {
-    path: '/admin/pool',
-    name: 'AdminPool',
-    component: () => import('@/views/admin/Pool.vue'),
+    path: '/admin',
+    name: 'Admin',
+    component: () => import('@/views/admin/Layout.vue'),
+    redirect: '/admin/pool',
+    children: [
+      {
+        path: 'pool',
+        name: 'AdminPool',
+        component: () => import('@/views/admin/Pool.vue'),
+      },
+    ],
   },
 
   {
