@@ -1,12 +1,10 @@
 <script setup lang='ts'>
 import { computed, ref } from 'vue'
-import { NDropdown, useMessage } from 'naive-ui'
+import { useMessage } from 'naive-ui'
 import AvatarComponent from './Avatar.vue'
 import TextComponent from './Text.vue'
-import { SvgIcon } from '@/components/common'
-import { useIconRender } from '@/hooks/useIconRender'
+import Icon from '@/components/common/Icon.vue'
 import { t } from '@/locales'
-import { useBasicLayout } from '@/hooks/useBasicLayout'
 import { copyToClip } from '@/utils/copy'
 
 interface Props {
@@ -15,6 +13,8 @@ interface Props {
   inversion?: boolean
   error?: boolean
   loading?: boolean
+  model?: string
+  usage?: Chat.TokenUsage | null
 }
 
 interface Emit {
@@ -23,58 +23,11 @@ interface Emit {
 }
 
 const props = defineProps<Props>()
-
 const emit = defineEmits<Emit>()
-
-const { isMobile } = useBasicLayout()
-
-const { iconRender } = useIconRender()
-
 const message = useMessage()
-
 const textRef = ref<HTMLElement>()
-
 const asRawText = ref(props.inversion)
-
 const messageRef = ref<HTMLElement>()
-
-const options = computed(() => {
-  const common = [
-    {
-      label: t('chat.copy'),
-      key: 'copyText',
-      icon: iconRender({ icon: 'ri:file-copy-2-line' }),
-    },
-    {
-      label: t('common.delete'),
-      key: 'delete',
-      icon: iconRender({ icon: 'ri:delete-bin-line' }),
-    },
-  ]
-
-  if (!props.inversion) {
-    common.unshift({
-      label: asRawText.value ? t('chat.preview') : t('chat.showRawText'),
-      key: 'toggleRenderType',
-      icon: iconRender({ icon: asRawText.value ? 'ic:outline-code-off' : 'ic:outline-code' }),
-    })
-  }
-
-  return common
-})
-
-function handleSelect(key: 'copyText' | 'delete' | 'toggleRenderType') {
-  switch (key) {
-    case 'copyText':
-      handleCopy()
-      return
-    case 'toggleRenderType':
-      asRawText.value = !asRawText.value
-      return
-    case 'delete':
-      emit('delete')
-  }
-}
 
 function handleRegenerate() {
   messageRef.value?.scrollIntoView()
@@ -90,56 +43,92 @@ async function handleCopy() {
     message.error(t('chat.copyFailed'))
   }
 }
+
+const cachedTokens = computed(() => {
+  if (!props.usage) return 0
+  const u = props.usage as any
+  if (u.cache_read_input_tokens) return u.cache_read_input_tokens
+  if (u.prompt_tokens_details?.cached_tokens) return u.prompt_tokens_details.cached_tokens
+  if (u.claude_cache_read_tokens) return u.claude_cache_read_tokens
+  return 0
+})
+
+const cacheWriteTokens = computed(() => {
+  if (!props.usage) return 0
+  const u = props.usage as any
+  if (u.cache_creation_input_tokens) return u.cache_creation_input_tokens
+  const c5 = u.claude_cache_creation_5_m_tokens || 0
+  const c1 = u.claude_cache_creation_1_h_tokens || 0
+  return c5 + c1
+})
 </script>
 
 <template>
-  <div
-    ref="messageRef"
-    class="flex w-full mb-6 overflow-hidden"
-    :class="[{ 'flex-row-reverse': inversion }]"
-  >
-    <div
-      class="flex items-center justify-center flex-shrink-0 h-8 overflow-hidden rounded-full basis-8"
-      :class="[inversion ? 'ml-2' : 'mr-2']"
-    >
-      <AvatarComponent :image="inversion" />
+  <div ref="messageRef" class="group" :class="[inversion ? 'flex justify-end mb-4' : 'mb-6']">
+    <!-- User Message -->
+    <div v-if="inversion" class="max-w-[75%]">
+      <div class="inline-block rounded-[22px] bg-[#f4f4f4] px-5 py-3">
+        <div class="text-base leading-[1.6] text-[#0d0d0d]">
+          <TextComponent ref="textRef" :inversion="inversion" :error="error" :text="text" :loading="loading" :as-raw-text="asRawText" />
+        </div>
+      </div>
+      <div class="mt-1 flex h-5 justify-end opacity-0 transition-opacity group-hover:opacity-100">
+        <button class="p-0.5 text-[#b4b4b4] transition-colors hover:text-[#0d0d0d]" @click="handleCopy">
+          <Icon name="copy" :size="14" />
+        </button>
+      </div>
     </div>
-    <div class="overflow-hidden text-sm " :class="[inversion ? 'items-end' : 'items-start']">
-      <p class="text-xs text-[#b4bbc4]" :class="[inversion ? 'text-right' : 'text-left']">
-        {{ dateTime }}
-      </p>
-      <div
-        class="flex items-end gap-1 mt-2"
-        :class="[inversion ? 'flex-row-reverse' : 'flex-row']"
-      >
-        <TextComponent
-          ref="textRef"
-          :inversion="inversion"
-          :error="error"
-          :text="text"
-          :loading="loading"
-          :as-raw-text="asRawText"
-        />
-        <div class="flex flex-col">
-          <button
-            v-if="!inversion"
-            class="mb-2 transition text-neutral-300 hover:text-neutral-800 dark:hover:text-neutral-300"
-            @click="handleRegenerate"
-          >
-            <SvgIcon icon="ri:restart-line" />
-          </button>
-          <NDropdown
-            :trigger="isMobile ? 'click' : 'hover'"
-            :placement="!inversion ? 'right' : 'left'"
-            :options="options"
-            @select="handleSelect"
-          >
-            <button class="transition text-neutral-300 hover:text-neutral-800 dark:hover:text-neutral-200">
-              <SvgIcon icon="ri:more-2-fill" />
-            </button>
-          </NDropdown>
+
+    <!-- Assistant Message -->
+    <div v-else class="flex gap-3">
+      <AvatarComponent :image="false" class="mt-1 flex-shrink-0" />
+      <div class="min-w-0 flex-1">
+        <!-- Typing indicator -->
+        <div v-if="loading && (!text || text.trim() === '')" class="typing-indicator flex items-center gap-1 py-2">
+          <span class="dot" /><span class="dot" /><span class="dot" />
+        </div>
+        <!-- Message text -->
+        <div v-else class="text-base leading-[1.6] text-[#0d0d0d]">
+          <TextComponent ref="textRef" :inversion="inversion" :error="error" :text="text" :loading="loading" :as-raw-text="asRawText" />
+        </div>
+        <!-- Action row -->
+        <div v-if="!loading" class="mt-2 flex items-center gap-1.5">
+          <span v-if="model" class="mr-1 select-none text-xs font-medium text-[#888]">{{ model }}</span>
+          <button class="action-btn" title="复制" @click="handleCopy"><Icon name="copy" :stroke-width="2.2" /></button>
+          <button class="action-btn" title="重新生成" @click="handleRegenerate"><Icon name="refresh" :stroke-width="2.2" /></button>
+          <button class="action-btn" title="有帮助"><Icon name="thumbs-up" :stroke-width="2.2" /></button>
+          <button class="action-btn" title="没帮助"><Icon name="thumbs-down" :stroke-width="2.2" /></button>
+
+          <!-- Token usage -->
+          <div v-if="usage && usage.total_tokens" class="ml-2 flex items-center gap-1 border-l border-[#e3e3e3] pl-2">
+            <Icon name="clock" :size="12" class="text-[#aaa]" />
+            <span class="select-none whitespace-nowrap text-[11px] text-[#aaa]">
+              {{ usage.prompt_tokens ?? 0 }} 入
+              <template v-if="cachedTokens > 0"><span class="text-[#10a37f]">({{ cachedTokens }} 缓存读)</span></template>
+              <template v-if="cacheWriteTokens > 0"><span class="text-[#e8912d]">({{ cacheWriteTokens }} 缓存写)</span></template>
+              · {{ usage.completion_tokens ?? 0 }} 出
+              · {{ usage.total_tokens }} 总
+            </span>
+          </div>
         </div>
       </div>
     </div>
   </div>
 </template>
+
+<style scoped>
+.action-btn {
+  @apply p-1 text-[#888] transition-colors hover:text-[#0d0d0d];
+}
+.typing-indicator .dot {
+  @apply inline-block h-2 w-2 rounded-full bg-[#999];
+  animation: typing-bounce 1.4s ease-in-out infinite both;
+}
+.typing-indicator .dot:nth-child(1) { animation-delay: 0s; }
+.typing-indicator .dot:nth-child(2) { animation-delay: 0.16s; }
+.typing-indicator .dot:nth-child(3) { animation-delay: 0.32s; }
+@keyframes typing-bounce {
+  0%, 80%, 100% { transform: scale(0.6); opacity: 0.4; }
+  40% { transform: scale(1); opacity: 1; }
+}
+</style>

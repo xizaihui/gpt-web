@@ -1,78 +1,24 @@
 <script lang="ts" setup>
-import { computed, nextTick } from 'vue'
-import { HoverButton, SvgIcon } from '@/components/common'
-import { useAppStore, useChatStore } from '@/store'
-
-interface Props {
-  usingContext: boolean
-}
-
-interface Emit {
-  (ev: 'export'): void
-  (ev: 'handleClear'): void
-}
-
-defineProps<Props>()
-
-const emit = defineEmits<Emit>()
+import { computed } from 'vue'
+import { useAppStore } from '@/store'
 
 const appStore = useAppStore()
-const chatStore = useChatStore()
-
 const collapsed = computed(() => appStore.siderCollapsed)
-const currentChatHistory = computed(() => chatStore.getChatHistoryByCurrentActive)
 
 function handleUpdateCollapsed() {
   appStore.setSiderCollapsed(!collapsed.value)
 }
-
-function onScrollToTop() {
-  const scrollRef = document.querySelector('#scrollRef')
-  if (scrollRef)
-    nextTick(() => scrollRef.scrollTop = 0)
-}
-
-function handleExport() {
-  emit('export')
-}
-
-function handleClear() {
-  emit('handleClear')
-}
 </script>
 
 <template>
-  <header
-    class="sticky top-0 left-0 right-0 z-30 border-b dark:border-neutral-800 bg-white/80 dark:bg-black/20 backdrop-blur"
+  <button
+    class="flex items-center justify-center w-9 h-9 rounded-xl hover:bg-[#f4f4f4] transition-colors text-[#0d0d0d]"
+    @click="handleUpdateCollapsed"
   >
-    <div class="relative flex items-center justify-between min-w-0 overflow-hidden h-14">
-      <div class="flex items-center">
-        <button
-          class="flex items-center justify-center w-11 h-11"
-          @click="handleUpdateCollapsed"
-        >
-          <SvgIcon v-if="collapsed" class="text-2xl" icon="ri:align-justify" />
-          <SvgIcon v-else class="text-2xl" icon="ri:align-right" />
-        </button>
-      </div>
-      <h1
-        class="flex-1 px-4 pr-6 overflow-hidden cursor-pointer select-none text-ellipsis whitespace-nowrap"
-        @dblclick="onScrollToTop"
-      >
-        {{ currentChatHistory?.title ?? '' }}
-      </h1>
-      <div class="flex items-center space-x-2">
-        <HoverButton @click="handleExport">
-          <span class="text-xl text-[#4f555e] dark:text-white">
-            <SvgIcon icon="ri:download-2-line" />
-          </span>
-        </HoverButton>
-        <HoverButton @click="handleClear">
-          <span class="text-xl text-[#4f555e] dark:text-white">
-            <SvgIcon icon="ri:delete-bin-line" />
-          </span>
-        </HoverButton>
-      </div>
-    </div>
-  </header>
+    <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+      <line x1="3" y1="12" x2="21" y2="12" />
+      <line x1="3" y1="6" x2="21" y2="6" />
+      <line x1="3" y1="18" x2="21" y2="18" />
+    </svg>
+  </button>
 </template>

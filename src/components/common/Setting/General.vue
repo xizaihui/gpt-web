@@ -3,14 +3,16 @@ import { computed, ref } from 'vue'
 import { NButton, NInput, NPopconfirm, NSelect, useMessage } from 'naive-ui'
 import type { Language, Theme } from '@/store/modules/app/helper'
 import { SvgIcon } from '@/components/common'
-import { useAppStore, useUserStore } from '@/store'
+import { useAppStore, useChatStore, useUserStore } from '@/store'
 import type { UserInfo } from '@/store/modules/user/helper'
 import { getCurrentDate } from '@/utils/functions'
 import { useBasicLayout } from '@/hooks/useBasicLayout'
 import { t } from '@/locales'
+import { fetchConversations, fetchMessages, importState } from '@/api'
 
 const appStore = useAppStore()
 const userStore = useUserStore()
+const chatStore = useChatStore()
 
 const { isMobile } = useBasicLayout()
 
@@ -36,21 +38,9 @@ const language = computed({
 })
 
 const themeOptions: { label: string; key: Theme; icon: string }[] = [
-  {
-    label: 'Auto',
-    key: 'auto',
-    icon: 'ri:contrast-line',
-  },
-  {
-    label: 'Light',
-    key: 'light',
-    icon: 'ri:sun-foggy-line',
-  },
-  {
-    label: 'Dark',
-    key: 'dark',
-    icon: 'ri:moon-foggy-line',
-  },
+  { label: 'Auto', key: 'auto', icon: 'ri:contrast-line' },
+  { label: 'Light', key: 'light', icon: 'ri:sun-foggy-line' },
+  { label: 'Dark', key: 'dark', icon: 'ri:moon-foggy-line' },
 ]
 
 const languageOptions: { label: string; key: Language; value: Language }[] = [
@@ -74,47 +64,67 @@ function handleReset() {
   window.location.reload()
 }
 
-function exportData(): void {
-  const date = getCurrentDate()
-  const data: string = localStorage.getItem('chatStorage') || '{}'
-  const jsonString: string = JSON.stringify(JSON.parse(data), null, 2)
-  const blob: Blob = new Blob([jsonString], { type: 'application/json' })
-  const url: string = URL.createObjectURL(blob)
-  const link: HTMLAnchorElement = document.createElement('a')
-  link.href = url
-  link.download = `chat-store_${date}.json`
-  document.body.appendChild(link)
-  link.click()
-  document.body.removeChild(link)
+// Export: fetch all data from backend API
+async function exportData(): Promise<void> {
+  try {
+    const conversations = await fetchConversations()
+    const chat: Array<{ uuid: number; data: Chat.Chat[] }> = []
+    for (const conv of conversations) {
+      const messages = await fetchMessages(conv.uuid)
+      chat.push({ uuid: conv.uuid, data: messages })
+    }
+    const exportObj = { history: conversations, chat }
+    const jsonString = JSON.stringify(exportObj, null, 2)
+    const blob = new Blob([jsonString], { type: 'application/json' })
+    const url = URL.createObjectURL(blob)
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `chat-export_${getCurrentDate()}.json`
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+    URL.revokeObjectURL(url)
+    ms.success('导出成功')
+  }
+  catch (e: unknown) {
+    ms.error(`导出失败: ${(e as Error).message}`)
+  }
 }
 
+// Import: upload JSON and send to backend
 function importData(event: Event): void {
   const target = event.target as HTMLInputElement
-  if (!target || !target.files)
-    return
+  if (!target?.files?.[0]) return
 
-  const file: File = target.files[0]
-  if (!file)
-    return
-
-  const reader: FileReader = new FileReader()
-  reader.onload = () => {
+  const file = target.files[0]
+  const reader = new FileReader()
+  reader.onload = async () => {
     try {
       const data = JSON.parse(reader.result as string)
-      localStorage.setItem('chatStorage', JSON.stringify(data))
+      if (!data.history || !data.chat)
+        throw new Error('无效的导入文件格式')
+      await importState({ history: data.history, chat: data.chat })
+      await chatStore.loadConversations()
       ms.success(t('common.success'))
-      location.reload()
     }
-    catch (error) {
-      ms.error(t('common.invalidFileFormat'))
+    catch (e: unknown) {
+      ms.error(`导入失败: ${(e as Error).message}`)
     }
+    // Reset file input so same file can be re-selected
+    target.value = ''
   }
   reader.readAsText(file)
 }
 
-function clearData(): void {
-  localStorage.removeItem('chatStorage')
-  location.reload()
+// Clear: delete all via backend API then reload store
+async function clearData(): Promise<void> {
+  try {
+    await chatStore.clearHistory()
+    ms.success(t('common.success'))
+  }
+  catch (e: unknown) {
+    ms.error(`清空失败: ${(e as Error).message}`)
+  }
 }
 
 function handleImportButtonClick(): void {
@@ -168,7 +178,7 @@ function handleImportButtonClick(): void {
             {{ $t('common.export') }}
           </NButton>
 
-          <input id="fileInput" type="file" style="display:none" @change="importData">
+          <input id="fileInput" type="file" accept=".json" style="display:none" @change="importData">
           <NButton size="small" @click="handleImportButtonClick">
             <template #icon>
               <SvgIcon icon="ri:upload-2-fill" />

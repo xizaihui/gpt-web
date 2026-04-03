@@ -6,13 +6,21 @@ export interface SettingsState {
   systemMessage: string
   temperature: number
   top_p: number
+  apiBaseUrl: string
+  apiKey: string
+  contextRounds: number
 }
+
+const DEFAULT_API_BASE_URL = import.meta.env.VITE_DEFAULT_API_BASE_URL || ''
 
 export function defaultSetting(): SettingsState {
   return {
-    systemMessage: 'You are ChatGPT, a large language model trained by OpenAI. Follow the user\'s instructions carefully. Respond using markdown.',
+    systemMessage: 'You are a helpful assistant. Follow the user\'s instructions carefully. Respond using markdown.',
     temperature: 0.8,
     top_p: 1,
+    apiBaseUrl: DEFAULT_API_BASE_URL,
+    apiKey: '',
+    contextRounds: 20,
   }
 }
 

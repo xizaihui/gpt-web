@@ -1,12 +1,10 @@
 <script lang="ts" setup>
-import { computed, onMounted, onUnmounted, onUpdated, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref } from 'vue'
 import MarkdownIt from 'markdown-it'
 import MdKatex from '@vscode/markdown-it-katex'
 import MdLinkAttributes from 'markdown-it-link-attributes'
 import MdMermaid from 'mermaid-it-markdown'
 import hljs from 'highlight.js'
-import { useBasicLayout } from '@/hooks/useBasicLayout'
-import { t } from '@/locales'
 import { copyToClip } from '@/utils/copy'
 
 interface Props {
@@ -18,8 +16,6 @@ interface Props {
 }
 
 const props = defineProps<Props>()
-
-const { isMobile } = useBasicLayout()
 
 const textRef = ref<HTMLElement>()
 
@@ -42,10 +38,6 @@ const wrapClass = computed(() => {
   return [
     'text-wrap',
     'min-w-[20px]',
-    'rounded-md',
-    isMobile.value ? 'p-2' : 'px-3 py-2',
-    props.inversion ? 'bg-[#d2f9d1]' : 'bg-[#f4f6f8]',
-    props.inversion ? 'dark:bg-[#a1dc95]' : 'dark:bg-[#1e1e20]',
     props.inversion ? 'message-request' : 'message-reply',
     { 'text-red-500': props.error },
   ]
@@ -54,7 +46,6 @@ const wrapClass = computed(() => {
 const text = computed(() => {
   const value = props.text ?? ''
   if (!props.asRawText) {
-    // 对数学公式进行处理，自动添加 $$ 符号
     const escapedText = escapeBrackets(escapeDollarNumber(value))
     return mdi.render(escapedText)
   }
@@ -62,33 +53,25 @@ const text = computed(() => {
 })
 
 function highlightBlock(str: string, lang?: string) {
-  return `<pre class="code-block-wrapper"><div class="code-block-header"><span class="code-block-header__lang">${lang}</span><span class="code-block-header__copy">${t('chat.copyCode')}</span></div><code class="hljs code-block-body ${lang}">${str}</code></pre>`
+  const displayLang = lang ? lang.charAt(0).toUpperCase() + lang.slice(1) : ''
+  return `<pre class="code-block-wrapper"><div class="code-block-header"><span class="code-block-header__lang"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="16 18 22 12 16 6"/><polyline points="8 6 2 12 8 18"/></svg>${displayLang}</span><span class="code-block-header__copy" title="复制代码"><svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg></span></div><code class="hljs code-block-body ${lang}">${str}</code></pre>`
 }
 
-function addCopyEvents() {
-  if (textRef.value) {
-    const copyBtn = textRef.value.querySelectorAll('.code-block-header__copy')
-    copyBtn.forEach((btn) => {
-      btn.addEventListener('click', () => {
-        const code = btn.parentElement?.nextElementSibling?.textContent
-        if (code) {
-          copyToClip(code).then(() => {
-            btn.textContent = t('chat.copied')
-            setTimeout(() => {
-              btn.textContent = t('chat.copyCode')
-            }, 1000)
-          })
-        }
-      })
-    })
-  }
-}
+// Delegated click handler — one listener covers all code copy buttons
+function handleTextClick(e: MouseEvent) {
+  const target = (e.target as HTMLElement).closest('.code-block-header__copy') as HTMLElement | null
+  if (!target) return
 
-function removeCopyEvents() {
-  if (textRef.value) {
-    const copyBtn = textRef.value.querySelectorAll('.code-block-header__copy')
-    copyBtn.forEach((btn) => {
-      btn.removeEventListener('click', () => { })
+  const code = target.parentElement?.nextElementSibling?.textContent
+  if (code) {
+    copyToClip(code).then(() => {
+      const originalHTML = target.innerHTML
+      target.innerHTML = '<svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+      target.setAttribute('title', '已复制!')
+      setTimeout(() => {
+        target.innerHTML = originalHTML
+        target.setAttribute('title', '复制代码')
+      }, 1500)
     })
   }
 }
@@ -123,20 +106,16 @@ function escapeBrackets(text: string) {
 }
 
 onMounted(() => {
-  addCopyEvents()
-})
-
-onUpdated(() => {
-  addCopyEvents()
+  textRef.value?.addEventListener('click', handleTextClick)
 })
 
 onUnmounted(() => {
-  removeCopyEvents()
+  textRef.value?.removeEventListener('click', handleTextClick)
 })
 </script>
 
 <template>
-  <div class="text-black" :class="wrapClass">
+  <div class="text-[#0d0d0d]" :class="wrapClass">
     <div ref="textRef" class="leading-relaxed break-words">
       <div v-if="!inversion">
         <div v-if="!asRawText" class="markdown-body" :class="{ 'markdown-body-generate': loading }" v-html="text" />

@@ -1,232 +1,413 @@
 import * as dotenv from 'dotenv'
-import 'isomorphic-fetch'
-import type { ChatGPTAPIOptions, ChatMessage, SendMessageOptions } from 'chatgpt'
-import { ChatGPTAPI, ChatGPTUnofficialProxyAPI } from 'chatgpt'
-import { SocksProxyAgent } from 'socks-proxy-agent'
-import httpsProxyAgent from 'https-proxy-agent'
-import fetch from 'node-fetch'
 import { sendResponse } from '../utils'
 import { isNotEmptyString } from '../utils/is'
-import type { ApiModel, ChatContext, ChatGPTUnofficialProxyAPIOptions, ModelConfig } from '../types'
-import type { RequestOptions, SetProxyOptions, UsageResponse } from './types'
-
-const { HttpsProxyAgent } = httpsProxyAgent
+import type { RequestOptions } from './types'
 
 dotenv.config()
 
-const ErrorCodeMessage: Record<string, string> = {
-  401: '[OpenAI] 提供错误的API密钥 | Incorrect API key provided',
-  403: '[OpenAI] 服务器拒绝访问，请稍后再试 | Server refused to access, please try again later',
-  502: '[OpenAI] 错误的网关 |  Bad Gateway',
-  503: '[OpenAI] 服务器繁忙，请稍后再试 | Server is busy, please try again later',
-  504: '[OpenAI] 网关超时 | Gateway Time-out',
-  500: '[OpenAI] 服务器繁忙，请稍后再试 | Internal Server Error',
+// Default config
+const API_BASE_URL = isNotEmptyString(process.env.OPENAI_API_BASE_URL)
+  ? process.env.OPENAI_API_BASE_URL
+  : 'https://api.catapi.top/v1'
+
+const API_KEY = process.env.OPENAI_API_KEY || ''
+const DEFAULT_MODEL = process.env.OPENAI_API_MODEL || 'gpt-4o'
+
+const AVAILABLE_MODELS = [
+  { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI' },
+  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI' },
+  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'Anthropic' },
+  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic' },
+  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google' },
+  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google' },
+  { id: 'deepseek-chat', name: 'DeepSeek V3', provider: 'DeepSeek' },
+  { id: 'deepseek-reasoner', name: 'DeepSeek R1', provider: 'DeepSeek' },
+]
+
+interface ChatMessage {
+  role: 'system' | 'user' | 'assistant'
+  content: string | Array<{ type: string; text?: string; image_url?: { url: string } }>
 }
 
-const timeoutMs: number = !isNaN(+process.env.TIMEOUT_MS) ? +process.env.TIMEOUT_MS : 100 * 1000
-const disableDebug: boolean = process.env.OPENAI_API_DISABLE_DEBUG === 'true'
+type ApiModel = 'ChatGPTAPI'
+const apiModel: ApiModel = 'ChatGPTAPI'
 
-let apiModel: ApiModel
-const model = isNotEmptyString(process.env.OPENAI_API_MODEL) ? process.env.OPENAI_API_MODEL : 'gpt-3.5-turbo'
+interface ChatContext {
+  conversationId?: string
+  parentMessageId?: string
+}
 
-if (!isNotEmptyString(process.env.OPENAI_API_KEY) && !isNotEmptyString(process.env.OPENAI_ACCESS_TOKEN))
-  throw new Error('Missing OPENAI_API_KEY or OPENAI_ACCESS_TOKEN environment variable')
+function isTextFileType(mimeType: string, fileName: string): boolean {
+  const textMimes = [
+    'text/plain', 'text/markdown', 'text/csv', 'text/xml', 'text/html',
+    'application/json', 'application/xml', 'application/javascript',
+    'application/typescript', 'application/x-yaml', 'application/x-python',
+  ]
+  if (textMimes.some(m => mimeType.includes(m) || mimeType.startsWith('text/'))) return true
+  const textExtensions = [
+    '.txt', '.md', '.json', '.csv', '.xml', '.html', '.htm',
+    '.py', '.js', '.ts', '.jsx', '.tsx', '.java', '.go', '.rs',
+    '.c', '.cpp', '.h', '.hpp', '.cs', '.rb', '.php', '.sh',
+    '.bash', '.zsh', '.yaml', '.yml', '.toml', '.ini', '.cfg',
+    '.conf', '.env', '.sql', '.r', '.swift', '.kt', '.scala',
+    '.vue', '.svelte', '.css', '.scss', '.less', '.sass',
+  ]
+  const ext = fileName.toLowerCase().substring(fileName.lastIndexOf('.'))
+  return textExtensions.includes(ext)
+}
 
-let api: ChatGPTAPI | ChatGPTUnofficialProxyAPI
-
-(async () => {
-  // More Info: https://github.com/transitive-bullshit/chatgpt-api
-
-  if (isNotEmptyString(process.env.OPENAI_API_KEY)) {
-    const OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL
-
-    const options: ChatGPTAPIOptions = {
-      apiKey: process.env.OPENAI_API_KEY,
-      completionParams: { model },
-      debug: !disableDebug,
-    }
-
-    // increase max token limit if use gpt-4
-    if (model.toLowerCase().includes('gpt-4')) {
-      // if use 32k model
-      if (model.toLowerCase().includes('32k')) {
-        options.maxModelTokens = 32768
-        options.maxResponseTokens = 8192
-      }
-      else if (/-4o-mini/.test(model.toLowerCase())) {
-        options.maxModelTokens = 128000
-        options.maxResponseTokens = 16384
-      }
-      // if use GPT-4 Turbo or GPT-4o
-      else if (/-preview|-turbo|o/.test(model.toLowerCase())) {
-        options.maxModelTokens = 128000
-        options.maxResponseTokens = 4096
-      }
-      else {
-        options.maxModelTokens = 8192
-        options.maxResponseTokens = 2048
-      }
-    }
-    else if (model.toLowerCase().includes('gpt-3.5')) {
-      if (/16k|1106|0125/.test(model.toLowerCase())) {
-        options.maxModelTokens = 16384
-        options.maxResponseTokens = 4096
-      }
-    }
-
-    if (isNotEmptyString(OPENAI_API_BASE_URL)) {
-      // if find /v1 in OPENAI_API_BASE_URL then use it
-      if (OPENAI_API_BASE_URL.includes('/v1'))
-        options.apiBaseUrl = `${OPENAI_API_BASE_URL}`
-      else
-        options.apiBaseUrl = `${OPENAI_API_BASE_URL}/v1`
-    }
-
-    setupProxy(options)
-
-    api = new ChatGPTAPI({ ...options })
-    apiModel = 'ChatGPTAPI'
+// ─── Build user content (handles files + text) ────────────────────────
+function buildUserContent(message: string, files: any[] | undefined): string | any[] {
+  if (!files || !Array.isArray(files) || files.length === 0) {
+    return message
   }
-  else {
-    const options: ChatGPTUnofficialProxyAPIOptions = {
-      accessToken: process.env.OPENAI_ACCESS_TOKEN,
-      apiReverseProxyUrl: isNotEmptyString(process.env.API_REVERSE_PROXY) ? process.env.API_REVERSE_PROXY : 'https://ai.fakeopen.com/api/conversation',
-      model,
-      debug: !disableDebug,
-    }
-
-    setupProxy(options)
-
-    api = new ChatGPTUnofficialProxyAPI({ ...options })
-    apiModel = 'ChatGPTUnofficialProxyAPI'
+  const content: any[] = []
+  if (message && isNotEmptyString(message)) {
+    content.push({ type: 'text', text: message })
   }
-})()
-
-async function chatReplyProcess(options: RequestOptions) {
-  const { message, lastContext, process, systemMessage, temperature, top_p } = options
-  try {
-    let options: SendMessageOptions = { timeoutMs }
-
-    if (apiModel === 'ChatGPTAPI') {
-      if (isNotEmptyString(systemMessage))
-        options.systemMessage = systemMessage
-      options.completionParams = { model, temperature, top_p }
+  for (const file of files) {
+    if (file.type && file.type.startsWith('image/')) {
+      content.push({
+        type: 'image_url',
+        image_url: { url: `data:${file.type};base64,${file.base64}` },
+      })
+    } else if (isTextFileType(file.type, file.name)) {
+      try {
+        const decoded = Buffer.from(file.base64, 'base64').toString('utf-8')
+        content.push({ type: 'text', text: `--- 文件: ${file.name} ---\n${decoded}\n--- 结束 ---` })
+      } catch {
+        content.push({ type: 'text', text: `[文件: ${file.name} (${file.type}) - 无法解码]` })
+      }
+    } else {
+      content.push({ type: 'text', text: `[已上传文件: ${file.name} (${file.type})]` })
     }
+  }
+  return content
+}
 
-    if (lastContext != null) {
-      if (apiModel === 'ChatGPTAPI')
-        options.parentMessageId = lastContext.parentMessageId
-      else
-        options = { ...lastContext }
-    }
+// ─── Claude: Anthropic Native Messages API (/v1/messages) ─────────────
+async function chatWithClaude(
+  useModel: string, useBaseUrl: string, useApiKey: string,
+  systemMessage: string | undefined, history: any[] | undefined,
+  message: string, files: any[] | undefined,
+  temperature: number | undefined,
+  onProgress: ((data: any) => void) | undefined,
+  lastContext: any,
+) {
+  // Build system blocks (top-level, with cache_control)
+  const systemBlocks: any[] = []
+  if (isNotEmptyString(systemMessage)) {
+    let sysMsg = systemMessage!
+      .replace(/You are ChatGPT, a large language model trained by OpenAI\./gi, 'You are a helpful assistant.')
+      .replace(/You are ChatGPT[^.]*\./gi, 'You are a helpful assistant.')
+    systemBlocks.push({ type: 'text', text: sysMsg, cache_control: { type: 'ephemeral' } })
+  }
 
-    const response = await api.sendMessage(message, {
-      ...options,
-      onProgress: (partialResponse) => {
-        process?.(partialResponse)
-      },
+  // Build messages array (Anthropic format: no "system" role in messages)
+  const messages: any[] = []
+
+  if (history && Array.isArray(history) && history.length > 0) {
+    history.forEach((msg: any, idx: number) => {
+      const isLast = idx === history.length - 1
+      if (isLast) {
+        // Mark last history message with cache_control for prefix caching
+        messages.push({
+          role: msg.role,
+          content: [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }],
+        })
+      } else {
+        messages.push({ role: msg.role, content: msg.content })
+      }
     })
-
-    return sendResponse({ type: 'Success', data: response })
-  }
-  catch (error: any) {
-    const code = error.statusCode
-    global.console.log(error)
-    if (Reflect.has(ErrorCodeMessage, code))
-      return sendResponse({ type: 'Fail', message: ErrorCodeMessage[code] })
-    return sendResponse({ type: 'Fail', message: error.message ?? 'Please check the back-end console' })
-  }
-}
-
-async function fetchUsage() {
-  const OPENAI_API_KEY = process.env.OPENAI_API_KEY
-  const OPENAI_API_BASE_URL = process.env.OPENAI_API_BASE_URL
-
-  if (!isNotEmptyString(OPENAI_API_KEY))
-    return Promise.resolve('-')
-
-  const API_BASE_URL = isNotEmptyString(OPENAI_API_BASE_URL)
-    ? OPENAI_API_BASE_URL
-    : 'https://api.openai.com'
-
-  const [startDate, endDate] = formatDate()
-
-  // 每月使用量
-  const urlUsage = `${API_BASE_URL}/v1/dashboard/billing/usage?start_date=${startDate}&end_date=${endDate}`
-
-  const headers = {
-    'Authorization': `Bearer ${OPENAI_API_KEY}`,
-    'Content-Type': 'application/json',
   }
 
-  const options = {} as SetProxyOptions
-
-  setupProxy(options)
-
-  try {
-    // 获取已使用量
-    const useResponse = await options.fetch(urlUsage, { headers })
-    if (!useResponse.ok)
-      throw new Error('获取使用量失败')
-    const usageData = await useResponse.json() as UsageResponse
-    const usage = Math.round(usageData.total_usage) / 100
-    return Promise.resolve(usage ? `$${usage}` : '-')
+  // Current user message
+  const userContent = buildUserContent(message, files)
+  if (typeof userContent === 'string') {
+    messages.push({ role: 'user', content: userContent })
+  } else {
+    // For Anthropic native, convert image_url format to Anthropic's source format
+    const anthropicContent = userContent.map((block: any) => {
+      if (block.type === 'image_url' && block.image_url?.url) {
+        // Convert data:mime;base64,xxx to Anthropic source format
+        const match = block.image_url.url.match(/^data:([^;]+);base64,(.+)$/)
+        if (match) {
+          return {
+            type: 'image',
+            source: { type: 'base64', media_type: match[1], data: match[2] },
+          }
+        }
+      }
+      return block
+    })
+    messages.push({ role: 'user', content: anthropicContent })
   }
-  catch (error) {
-    global.console.log(error)
-    return Promise.resolve('-')
+
+  // Build URL: /v1/messages
+  const baseUrl = useBaseUrl.endsWith('/') ? useBaseUrl.slice(0, -1) : useBaseUrl
+  const cleanBase = baseUrl.replace(/\/v1$/, '')
+  const url = `${cleanBase}/v1/messages`
+
+  const requestBody: Record<string, any> = {
+    model: useModel,
+    messages,
+    max_tokens: 8192,
+    stream: true,
   }
-}
+  if (systemBlocks.length > 0) {
+    requestBody.system = systemBlocks
+  }
+  if (temperature !== undefined && temperature !== null) {
+    requestBody.temperature = temperature
+  }
 
-function formatDate(): string[] {
-  const today = new Date()
-  const year = today.getFullYear()
-  const month = today.getMonth() + 1
-  const lastDay = new Date(year, month, 0)
-  const formattedFirstDay = `${year}-${month.toString().padStart(2, '0')}-01`
-  const formattedLastDay = `${year}-${month.toString().padStart(2, '0')}-${lastDay.getDate().toString().padStart(2, '0')}`
-  return [formattedFirstDay, formattedLastDay]
-}
+  console.log(`[Claude Native] POST ${url} | model: ${useModel} | system: ${systemBlocks.length} blocks | messages: ${messages.length} | cachePts: system+lastHistory`)
 
-async function chatConfig() {
-  const usage = await fetchUsage()
-  const reverseProxy = process.env.API_REVERSE_PROXY ?? '-'
-  const httpsProxy = (process.env.HTTPS_PROXY || process.env.ALL_PROXY) ?? '-'
-  const socksProxy = (process.env.SOCKS_PROXY_HOST && process.env.SOCKS_PROXY_PORT)
-    ? (`${process.env.SOCKS_PROXY_HOST}:${process.env.SOCKS_PROXY_PORT}`)
-    : '-'
-  return sendResponse<ModelConfig>({
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': useApiKey,
+      'Authorization': `Bearer ${useApiKey}`,
+      'anthropic-version': '2023-06-01',
+      'anthropic-beta': 'prompt-caching-2024-07-31',
+    },
+    body: JSON.stringify(requestBody),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`API error ${response.status}: ${errorText}`)
+  }
+
+  const reader = response.body as any
+  const decoder = new TextDecoder()
+  let fullText = ''
+  let buffer = ''
+  let finalUsage: any = null
+  let responseModel = useModel
+
+  // Anthropic SSE format
+  for await (const chunk of reader) {
+    buffer += decoder.decode(chunk, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith('data: ')) continue
+      const data = trimmed.slice(6)
+      if (data === '[DONE]') break
+
+      try {
+        const parsed = JSON.parse(data)
+
+        // message_start: contains usage info
+        if (parsed.type === 'message_start' && parsed.message) {
+          responseModel = parsed.message.model || useModel
+          if (parsed.message.usage) {
+            finalUsage = {
+              prompt_tokens: parsed.message.usage.input_tokens || 0,
+              completion_tokens: 0,
+              total_tokens: parsed.message.usage.input_tokens || 0,
+              // Anthropic cache fields
+              cache_creation_input_tokens: parsed.message.usage.cache_creation_input_tokens || 0,
+              cache_read_input_tokens: parsed.message.usage.cache_read_input_tokens || 0,
+            }
+          }
+        }
+
+        // content_block_delta: streaming text
+        if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+          fullText += parsed.delta.text
+          onProgress?.({
+            id: 'msg',
+            text: fullText,
+            role: 'assistant',
+            model: responseModel,
+            detail: parsed,
+          })
+        }
+
+        // message_delta: final usage (output tokens)
+        if (parsed.type === 'message_delta' && parsed.usage) {
+          if (finalUsage) {
+            finalUsage.completion_tokens = parsed.usage.output_tokens || 0
+            finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + (parsed.usage.output_tokens || 0)
+          }
+        }
+      } catch (e) {
+        // skip
+      }
+    }
+  }
+
+  // Send final usage
+  if (finalUsage) {
+    console.log(`[Claude Native] usage:`, JSON.stringify(finalUsage))
+    onProgress?.({
+      id: 'usage',
+      text: fullText,
+      role: 'assistant',
+      model: responseModel,
+      usage: finalUsage,
+    })
+  }
+
+  return sendResponse({
     type: 'Success',
-    data: { apiModel, reverseProxy, timeoutMs, socksProxy, httpsProxy, usage },
+    data: { id: 'msg-' + Date.now(), text: fullText, role: 'assistant', conversationId: lastContext?.conversationId },
   })
 }
 
-function setupProxy(options: SetProxyOptions) {
-  if (isNotEmptyString(process.env.SOCKS_PROXY_HOST) && isNotEmptyString(process.env.SOCKS_PROXY_PORT)) {
-    const agent = new SocksProxyAgent({
-      hostname: process.env.SOCKS_PROXY_HOST,
-      port: process.env.SOCKS_PROXY_PORT,
-      userId: isNotEmptyString(process.env.SOCKS_PROXY_USERNAME) ? process.env.SOCKS_PROXY_USERNAME : undefined,
-      password: isNotEmptyString(process.env.SOCKS_PROXY_PASSWORD) ? process.env.SOCKS_PROXY_PASSWORD : undefined,
-    })
-    options.fetch = (url, options) => {
-      return fetch(url, { agent, ...options })
+// ─── OpenAI Compatible API (/v1/chat/completions) ─────────────────────
+async function chatWithOpenAI(
+  useModel: string, useBaseUrl: string, useApiKey: string,
+  systemMessage: string | undefined, history: any[] | undefined,
+  message: string, files: any[] | undefined,
+  temperature: number | undefined,
+  onProgress: ((data: any) => void) | undefined,
+  lastContext: any,
+) {
+  const messages: any[] = []
+
+  if (isNotEmptyString(systemMessage)) {
+    let sysMsg = systemMessage!
+    if (useModel && !useModel.startsWith('gpt-')) {
+      sysMsg = sysMsg
+        .replace(/You are ChatGPT, a large language model trained by OpenAI\./gi, 'You are a helpful assistant.')
+        .replace(/You are ChatGPT[^.]*\./gi, 'You are a helpful assistant.')
     }
+    messages.push({ role: 'system', content: sysMsg })
   }
-  else if (isNotEmptyString(process.env.HTTPS_PROXY) || isNotEmptyString(process.env.ALL_PROXY)) {
-    const httpsProxy = process.env.HTTPS_PROXY || process.env.ALL_PROXY
-    if (httpsProxy) {
-      const agent = new HttpsProxyAgent(httpsProxy)
-      options.fetch = (url, options) => {
-        return fetch(url, { agent, ...options })
+
+  if (history && Array.isArray(history)) {
+    messages.push(...history)
+  }
+
+  const userContent = buildUserContent(message, files)
+  messages.push({ role: 'user', content: userContent })
+
+  const baseUrl = useBaseUrl.endsWith('/') ? useBaseUrl.slice(0, -1) : useBaseUrl
+  const url = baseUrl.includes('/v1') ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
+
+  const requestBody: Record<string, any> = {
+    model: useModel,
+    messages,
+    stream: true,
+    stream_options: { include_usage: true },
+  }
+  if (temperature !== undefined && temperature !== null) {
+    requestBody.temperature = temperature
+  } else {
+    requestBody.temperature = 0.7
+  }
+
+  console.log(`[OpenAI] POST ${url} | model: ${useModel} | messages: ${messages.length}`)
+
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${useApiKey}`,
+    },
+    body: JSON.stringify(requestBody),
+  })
+
+  if (!response.ok) {
+    const errorText = await response.text()
+    throw new Error(`API error ${response.status}: ${errorText}`)
+  }
+
+  const reader = response.body as any
+  const decoder = new TextDecoder()
+  let fullText = ''
+  let buffer = ''
+  let finalUsage: any = null
+
+  for await (const chunk of reader) {
+    buffer += decoder.decode(chunk, { stream: true })
+    const lines = buffer.split('\n')
+    buffer = lines.pop() || ''
+
+    for (const line of lines) {
+      const trimmed = line.trim()
+      if (!trimmed || !trimmed.startsWith('data: ')) continue
+      const data = trimmed.slice(6)
+      if (data === '[DONE]') break
+
+      try {
+        const parsed = JSON.parse(data)
+        if (parsed.usage) finalUsage = parsed.usage
+
+        const delta = parsed.choices?.[0]?.delta?.content
+        if (delta) {
+          fullText += delta
+          onProgress?.({
+            id: parsed.id || 'msg',
+            text: fullText,
+            role: 'assistant',
+            model: parsed.model || useModel,
+            detail: parsed,
+          })
+        }
+      } catch (e) {
+        // skip
       }
     }
   }
-  else {
-    options.fetch = (url, options) => {
-      return fetch(url, { ...options })
-    }
+
+  if (finalUsage) {
+    console.log(`[OpenAI] usage:`, JSON.stringify(finalUsage))
+    onProgress?.({
+      id: 'usage',
+      text: fullText,
+      role: 'assistant',
+      model: useModel,
+      usage: finalUsage,
+    })
   }
+
+  return sendResponse({
+    type: 'Success',
+    data: { id: 'msg-' + Date.now(), text: fullText, role: 'assistant', conversationId: lastContext?.conversationId },
+  })
+}
+
+// ─── Main entry point ─────────────────────────────────────────────────
+async function chatReplyProcess(options: RequestOptions) {
+  const { message, lastContext, process: onProgress, systemMessage, temperature, top_p, model: requestModel, apiBaseUrl: reqBaseUrl, apiKey: reqApiKey, files, history } = options as any
+  try {
+    const useModel = requestModel || DEFAULT_MODEL
+    const isClaude = useModel && (useModel.startsWith('claude-') || useModel.includes('claude'))
+    const useBaseUrl = (reqBaseUrl && isNotEmptyString(reqBaseUrl)) ? reqBaseUrl : API_BASE_URL
+    const useApiKey = (reqApiKey && isNotEmptyString(reqApiKey)) ? reqApiKey : API_KEY
+
+    if (isClaude) {
+      return await chatWithClaude(useModel, useBaseUrl, useApiKey, systemMessage, history, message, files, temperature, onProgress, lastContext)
+    } else {
+      return await chatWithOpenAI(useModel, useBaseUrl, useApiKey, systemMessage, history, message, files, temperature, onProgress, lastContext)
+    }
+  } catch (error: any) {
+    global.console.error('Chat error:', error)
+    return sendResponse({ type: 'Fail', message: error.message ?? 'Unknown error' })
+  }
+}
+
+async function chatConfig() {
+  return sendResponse({
+    type: 'Success',
+    data: {
+      apiModel,
+      reverseProxy: '-',
+      timeoutMs: 100000,
+      socksProxy: '-',
+      httpsProxy: '-',
+      usage: '-',
+      availableModels: AVAILABLE_MODELS,
+      defaultModel: DEFAULT_MODEL,
+    },
+  })
 }
 
 function currentModel(): ApiModel {
@@ -234,5 +415,4 @@ function currentModel(): ApiModel {
 }
 
 export type { ChatContext, ChatMessage }
-
 export { chatReplyProcess, chatConfig, currentModel }
