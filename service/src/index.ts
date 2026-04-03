@@ -131,10 +131,16 @@ router.post('/verify', async (req, res) => {
 
 // ---- Storage API (protected by auth when AUTH_SECRET_KEY is set) ----
 
+/** Extract client ID from request header */
+function getClientId(req: any): string {
+  return (req.headers['x-client-id'] as string) || 'default'
+}
+
 // List all conversations (sidebar)
-router.get('/conversations', auth, async (_req, res) => {
+router.get('/conversations', auth, async (req, res) => {
   try {
-    const rows = storage.listConversations()
+    const clientId = getClientId(req)
+    const rows = storage.listConversations(clientId)
     const history = rows.map(r => ({ uuid: r.uuid, title: r.title, isEdit: false }))
     res.json({ status: 'Success', data: history })
   }
@@ -146,8 +152,9 @@ router.get('/conversations', auth, async (_req, res) => {
 // Create conversation
 router.post('/conversations', auth, async (req, res) => {
   try {
+    const clientId = getClientId(req)
     const { uuid, title } = req.body
-    storage.createConversation(uuid, title || '新对话')
+    storage.createConversation(uuid, title || '新对话', clientId)
     res.json({ status: 'Success', data: null })
   }
   catch (e: any) {
@@ -158,9 +165,10 @@ router.post('/conversations', auth, async (req, res) => {
 // Update conversation title
 router.patch('/conversations/:uuid', auth, async (req, res) => {
   try {
+    const clientId = getClientId(req)
     const uuid = Number(req.params.uuid)
     const { title } = req.body
-    storage.updateConversationTitle(uuid, title)
+    storage.updateConversationTitle(uuid, title, clientId)
     res.json({ status: 'Success', data: null })
   }
   catch (e: any) {
@@ -171,8 +179,9 @@ router.patch('/conversations/:uuid', auth, async (req, res) => {
 // Delete conversation
 router.delete('/conversations/:uuid', auth, async (req, res) => {
   try {
+    const clientId = getClientId(req)
     const uuid = Number(req.params.uuid)
-    storage.deleteConversation(uuid)
+    storage.deleteConversation(uuid, clientId)
     res.json({ status: 'Success', data: null })
   }
   catch (e: any) {
@@ -181,9 +190,10 @@ router.delete('/conversations/:uuid', auth, async (req, res) => {
 })
 
 // Clear all conversations
-router.delete('/conversations', auth, async (_req, res) => {
+router.delete('/conversations', auth, async (req, res) => {
   try {
-    storage.clearAllConversations()
+    const clientId = getClientId(req)
+    storage.clearAllConversations(clientId)
     res.json({ status: 'Success', data: null })
   }
   catch (e: any) {
@@ -207,14 +217,10 @@ router.get('/conversations/:uuid/messages', auth, async (req, res) => {
 // Upsert a single message (add or update)
 router.put('/conversations/:uuid/messages/:index', auth, async (req, res) => {
   try {
+    const clientId = getClientId(req)
     const uuid = Number(req.params.uuid)
     const index = Number(req.params.index)
-    // Auto-create conversation if not exists
-    if (!storage.getConversation(uuid)) {
-      const title = req.body.text?.substring(0, 50) || '新对话'
-      storage.createConversation(uuid, title)
-    }
-    storage.upsertMessage(uuid, index, req.body)
+    storage.upsertMessage(uuid, index, req.body, clientId)
     res.json({ status: 'Success', data: null })
   }
   catch (e: any) {
@@ -250,10 +256,11 @@ router.delete('/conversations/:uuid/messages', auth, async (req, res) => {
 // Import full state from localStorage (migration endpoint)
 router.post('/conversations/import', auth, async (req, res) => {
   try {
+    const clientId = getClientId(req)
     const { history, chat } = req.body
     if (!history || !chat)
       throw new Error('Invalid state: need history and chat arrays')
-    storage.importFullState({ history, chat })
+    storage.importFullState({ history, chat }, clientId)
     res.json({ status: 'Success', data: { imported: history.length } })
   }
   catch (e: any) {

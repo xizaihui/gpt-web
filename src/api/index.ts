@@ -1,6 +1,12 @@
 import type { GenericAbortSignal } from 'axios'
 import { post } from '@/utils/request'
 import { useAuthStore, useSettingStore } from '@/store'
+import { getClientId } from '@/utils/fingerprint'
+
+// ---- Client ID (browser fingerprint) ----
+let _clientId: string | null = null
+// Initialize eagerly — called on module load
+getClientId().then(id => { _clientId = id })
 
 // ---- Base URL helper ----
 function apiUrl(path: string): string {
@@ -10,6 +16,8 @@ function apiUrl(path: string): string {
 
 function authHeaders(): Record<string, string> {
   const headers: Record<string, string> = { 'Content-Type': 'application/json' }
+  if (_clientId)
+    headers['X-Client-Id'] = _clientId
   try {
     const authStore = useAuthStore()
     if (authStore.token)
@@ -253,6 +261,8 @@ export async function fetchChatAPIProcess<T = any>(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
   }
+  if (_clientId)
+    headers['X-Client-Id'] = _clientId
   const token = authStore.token
   if (token)
     headers.Authorization = `Bearer ${token}`
