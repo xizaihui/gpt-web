@@ -4,6 +4,12 @@ import { computed, ref } from 'vue'
 // Model data — single source of truth
 const MODEL_GROUPS = [
   {
+    provider: 'ChatGPT Plus',
+    models: [
+      { label: 'GPT-5.4 (订阅)', value: 'codex:gpt-5.4' },
+    ],
+  },
+  {
     provider: 'OpenAI',
     models: [
       { label: 'GPT-4o', value: 'gpt-4o' },

@@ -6,6 +6,7 @@ import { auth } from './middleware/auth'
 import { limiter } from './middleware/limiter'
 import { isNotEmptyString } from './utils/is'
 import * as storage from './storage'
+import { getAllTokens, syncFromOpenClaw, addToken, removeToken, getActiveTokens } from './codex'
 
 const app = express()
 const router = express.Router()
@@ -247,6 +248,50 @@ router.post('/conversations/import', auth, async (req, res) => {
       throw new Error('Invalid state: need history and chat arrays')
     storage.importFullState({ history, chat })
     res.json({ status: 'Success', data: { imported: history.length } })
+  }
+  catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// ---- Codex OAuth Token Management ----
+
+// List Codex tokens (masked)
+router.get('/codex/tokens', auth, async (_req, res) => {
+  try {
+    // Sync from OpenClaw first
+    syncFromOpenClaw()
+    const tokens = getAllTokens()
+    const now = Date.now()
+    const masked = tokens.map(t => ({
+      email: t.email,
+      active: t.expires > now + 5 * 60 * 1000,
+      expiresAt: new Date(t.expires).toISOString(),
+      expiresIn: Math.max(0, Math.floor((t.expires - now) / 1000 / 60)) + ' min',
+    }))
+    res.json({ status: 'Success', data: masked })
+  }
+  catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// Sync from OpenClaw
+router.post('/codex/sync', auth, async (_req, res) => {
+  try {
+    const tokens = syncFromOpenClaw()
+    res.json({ status: 'Success', data: { synced: tokens.length } })
+  }
+  catch (e: any) {
+    res.json({ status: 'Fail', message: e.message, data: null })
+  }
+})
+
+// Remove a token
+router.delete('/codex/tokens/:email', auth, async (req, res) => {
+  try {
+    removeToken(req.params.email)
+    res.json({ status: 'Success', data: null })
   }
   catch (e: any) {
     res.json({ status: 'Fail', message: e.message, data: null })

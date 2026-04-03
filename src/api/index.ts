@@ -110,6 +110,20 @@ export function importState(state: { history: any[]; chat: any[] }): Promise<{ i
   return apiPost('/conversations/import', state)
 }
 
+// ---- Codex OAuth Token API ----
+
+export function fetchCodexTokens(): Promise<Array<{ email: string; active: boolean; expiresAt: string; expiresIn: string }>> {
+  return apiGet('/codex/tokens')
+}
+
+export function syncCodexTokens(): Promise<{ synced: number }> {
+  return apiPost('/codex/sync')
+}
+
+export function deleteCodexToken(email: string): Promise<void> {
+  return apiDelete(`/codex/tokens/${encodeURIComponent(email)}`)
+}
+
 export function fetchChatAPI<T = any>(
   prompt: string,
   options?: { conversationId?: string; parentMessageId?: string },

@@ -2,6 +2,7 @@ import * as dotenv from 'dotenv'
 import { sendResponse } from '../utils'
 import { isNotEmptyString } from '../utils/is'
 import type { RequestOptions } from './types'
+import { chatWithCodex, CODEX_MODELS } from '../codex'
 
 dotenv.config()
 
@@ -22,6 +23,7 @@ const AVAILABLE_MODELS = [
   { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google' },
   { id: 'deepseek-chat', name: 'DeepSeek V3', provider: 'DeepSeek' },
   { id: 'deepseek-reasoner', name: 'DeepSeek R1', provider: 'DeepSeek' },
+  ...CODEX_MODELS.map(m => ({ id: m.id, name: m.name, provider: m.provider })),
 ]
 
 interface ChatMessage {
@@ -379,11 +381,20 @@ async function chatReplyProcess(options: RequestOptions) {
   const { message, lastContext, process: onProgress, systemMessage, temperature, top_p, model: requestModel, apiBaseUrl: reqBaseUrl, apiKey: reqApiKey, files, history } = options as any
   try {
     const useModel = requestModel || DEFAULT_MODEL
+    const isCodex = useModel && useModel.startsWith('codex:')
     const isClaude = useModel && (useModel.startsWith('claude-') || useModel.includes('claude'))
     const useBaseUrl = (reqBaseUrl && isNotEmptyString(reqBaseUrl)) ? reqBaseUrl : API_BASE_URL
     const useApiKey = (reqApiKey && isNotEmptyString(reqApiKey)) ? reqApiKey : API_KEY
 
-    if (isClaude) {
+    if (isCodex) {
+      // Route to Codex (ChatGPT subscription) API
+      const codexModel = CODEX_MODELS.find(m => m.id === useModel)?.codexModel || 'gpt-5.4'
+      const result = await chatWithCodex(codexModel, systemMessage, history, message, onProgress)
+      if (!result.success) {
+        return sendResponse({ type: 'Fail', message: result.error || 'Codex API error' })
+      }
+      return sendResponse({ type: 'Success', data: { id: 'codex-' + Date.now(), text: '', role: 'assistant' } })
+    } else if (isClaude) {
       return await chatWithClaude(useModel, useBaseUrl, useApiKey, systemMessage, history, message, files, temperature, onProgress, lastContext)
     } else {
       return await chatWithOpenAI(useModel, useBaseUrl, useApiKey, systemMessage, history, message, files, temperature, onProgress, lastContext)
