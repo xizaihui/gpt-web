@@ -4,7 +4,6 @@ import { useRoute } from 'vue-router'
 import { useDialog, useMessage } from 'naive-ui'
 import { Message } from './components'
 import ModelSelector from './components/ModelSelector.vue'
-import ConfigModal from './components/ConfigModal.vue'
 import Icon from '@/components/common/Icon.vue'
 import { useScroll } from './hooks/useScroll'
 import { useChat } from './hooks/useChat'
@@ -248,9 +247,6 @@ function formatRecentDate(timestamp: number): string {
   const mins = String(d.getMinutes()).padStart(2, '0')
   return `${month}月${day}日 ${hours}:${mins}`
 }
-
-// API Config Modal
-const showConfigModal = ref(false)
 
 // Reset loading state on page load
 dataSources.value.forEach((item, index) => {
@@ -593,21 +589,6 @@ onUnmounted(() => {
         <ModelSelector v-model="selectedModel" />
       </div>
 
-      <!-- Right side: config + user avatar -->
-      <div class="flex items-center gap-1">
-        <!-- Config button (gear icon) -->
-        <button
-          class="icon-btn text-[#666]"
-          title="API 配置"
-          @click="showConfigModal = true"
-        >
-          <Icon name="settings" :size="18" />
-        </button>
-        <!-- User avatar -->
-        <div class="w-7 h-7 rounded-full bg-[#19c37d] flex items-center justify-center cursor-pointer">
-          <span class="text-white text-xs font-medium">U</span>
-        </div>
-      </div>
     </div>
 
     <!-- Click outside to close attach menu -->
@@ -827,8 +808,6 @@ onUnmounted(() => {
       </div>
     </footer>
 
-    <!-- API Config Modal -->
-    <ConfigModal v-model="showConfigModal" />
   </div>
 </template>
 
