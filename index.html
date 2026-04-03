@@ -18,62 +18,42 @@
 				justify-content: center;
 				align-items: center;
 				height: 100vh;
+				background: #fff;
 			}
-
-			.balls {
-				width: 4em;
+			.loading-wrap .loader {
 				display: flex;
-				flex-flow: row nowrap;
-				align-items: center;
-				justify-content: space-between;
+				flex-direction: column;
+				gap: 10px;
 			}
-
-			.balls div {
-				width: 0.8em;
-				height: 0.8em;
-				border-radius: 50%;
-				background-color: #4b9e5f;
+			.loading-wrap .bar {
+				height: 12px;
+				border-radius: 6px;
+				background: linear-gradient(90deg, #e8e8e8 25%, #f4f4f4 50%, #e8e8e8 75%);
+				background-size: 200% 100%;
+				animation: shimmer 1.5s ease-in-out infinite;
 			}
-
-			.balls div:nth-of-type(1) {
-				transform: translateX(-100%);
-				animation: left-swing 0.5s ease-in alternate infinite;
+			.loading-wrap .bar:nth-child(1) { width: 120px; }
+			.loading-wrap .bar:nth-child(2) { width: 180px; }
+			.loading-wrap .bar:nth-child(3) { width: 90px; }
+			@keyframes shimmer {
+				0% { background-position: 200% 0; }
+				100% { background-position: -200% 0; }
 			}
-
-			.balls div:nth-of-type(3) {
-				transform: translateX(-95%);
-				animation: right-swing 0.5s ease-out alternate infinite;
-			}
-
-			@keyframes left-swing {
-
-				50%,
-				100% {
-					transform: translateX(95%);
-				}
-			}
-
-			@keyframes right-swing {
-				50% {
-					transform: translateX(-95%);
-				}
-
-				100% {
-					transform: translateX(100%);
-				}
-			}
-
 			@media (prefers-color-scheme: dark) {
-				body {
-					background: #121212;
+				body { background: #121212; }
+				.loading-wrap { background: #121212; }
+				.loading-wrap .bar {
+					background: linear-gradient(90deg, #2a2a2a 25%, #3a3a3a 50%, #2a2a2a 75%);
+					background-size: 200% 100%;
+					animation: shimmer 1.5s ease-in-out infinite;
 				}
 			}
 		</style>
 		<div class="loading-wrap">
-			<div class="balls">
-				<div></div>
-				<div></div>
-				<div></div>
+			<div class="loader">
+				<div class="bar"></div>
+				<div class="bar"></div>
+				<div class="bar"></div>
 			</div>
 		</div>
 	</div>
