@@ -1,12 +1,26 @@
 /**
  * Browser fingerprint generator
  * Generates a stable anonymous ID based on browser/device characteristics.
- * No external dependencies — uses canvas, WebGL, screen, timezone, etc.
+ * No external dependencies. Works on HTTP (no crypto.subtle required).
  */
 
-async function sha256(str: string): Promise<string> {
-  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str))
-  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2, '0')).join('')
+/**
+ * Simple string hash (FNV-1a inspired, 128-bit via 4x32-bit).
+ * Not cryptographic — just needs to be stable and well-distributed.
+ */
+function simpleHash(str: string): string {
+  // Use 4 independent FNV-1a 32-bit hashes with different seeds for 128-bit output
+  const seeds = [0x811c9dc5, 0x050c5d1f, 0x1a47e90b, 0x3b9aca07]
+  const results: number[] = []
+  for (const seed of seeds) {
+    let h = seed
+    for (let i = 0; i < str.length; i++) {
+      h ^= str.charCodeAt(i)
+      h = Math.imul(h, 0x01000193)
+    }
+    results.push(h >>> 0) // unsigned
+  }
+  return results.map(n => n.toString(16).padStart(8, '0')).join('')
 }
 
 function getCanvasFingerprint(): string {
@@ -80,10 +94,9 @@ export async function getClientId(): Promise<string> {
   const stored = localStorage.getItem(STORAGE_KEY)
   if (stored && stored.length >= 16) return stored
 
-  // Generate from fingerprint
+  // Generate from fingerprint (synchronous — no crypto.subtle needed)
   const signals = collectSignals()
-  const hash = await sha256(signals)
-  const clientId = hash.substring(0, 32) // 32 hex chars = 128 bits
+  const clientId = simpleHash(signals) // 32 hex chars = 128 bits
 
   localStorage.setItem(STORAGE_KEY, clientId)
   return clientId
