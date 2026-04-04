@@ -1,5 +1,5 @@
 <script setup lang='ts'>
-import { computed, ref } from 'vue'
+import { computed, ref, watch, onBeforeUnmount } from 'vue'
 import { useMessage } from 'naive-ui'
 import AvatarComponent from './Avatar.vue'
 import TextComponent from './Text.vue'
@@ -8,6 +8,8 @@ import { t } from '@/locales'
 import { copyToClip } from '@/utils/copy'
 
 const reasoningExpanded = ref(false)
+const thinkingPhase = ref(false)   // true = past the dots, show "思考中..."
+let thinkingTimer: ReturnType<typeof setTimeout> | null = null
 
 interface Props {
   dateTime?: string
@@ -31,6 +33,23 @@ const message = useMessage()
 const textRef = ref<HTMLElement>()
 const asRawText = ref(props.inversion)
 const messageRef = ref<HTMLElement>()
+
+// In thinking mode: after 1s switch from dots to "思考中..." text
+const isThinkingModel = computed(() => props.model?.includes('-thinking'))
+watch(
+  () => props.loading,
+  (val) => {
+    if (val && isThinkingModel.value) {
+      thinkingPhase.value = false
+      thinkingTimer = setTimeout(() => { thinkingPhase.value = true }, 1000)
+    } else {
+      thinkingPhase.value = false
+      if (thinkingTimer) { clearTimeout(thinkingTimer); thinkingTimer = null }
+    }
+  },
+  { immediate: true },
+)
+onBeforeUnmount(() => { if (thinkingTimer) clearTimeout(thinkingTimer) })
 
 function handleRegenerate() {
   messageRef.value?.scrollIntoView()
@@ -87,37 +106,29 @@ const cacheWriteTokens = computed(() => {
       <AvatarComponent :image="false" class="mt-1 flex-shrink-0" />
       <div class="min-w-0 flex-1">
         <!-- Typing indicator -->
-        <div v-if="loading && (!text || text.trim() === '') && !reasoning" class="py-2">
-          <!-- Thinking mode: text indicator -->
-          <span v-if="model && model.includes('-thinking')" class="thinking-text text-[13px] font-medium text-[#0066ff]">思考中...</span>
-          <!-- Normal mode: pulsing dots -->
-          <div v-else class="flex items-center gap-[5px]">
+        <div v-if="loading && (!text || text.trim() === '')" class="py-2">
+          <!-- Thinking mode: after 1s show "思考中..." until text streams in -->
+          <span v-if="isThinkingModel && thinkingPhase" class="thinking-text text-[13px] font-medium text-[#0066ff]">思考中...</span>
+          <!-- Dots phase (normal mode always, thinking mode first 1s) -->
+          <div v-else-if="!isThinkingModel || !thinkingPhase" class="flex items-center gap-[5px]">
             <span class="typing-dot" />
             <span class="typing-dot [animation-delay:0.2s]" />
             <span class="typing-dot [animation-delay:0.4s]" />
           </div>
         </div>
-        <!-- Reasoning / Thinking block -->
-        <div v-if="reasoning" class="mb-3">
+        <!-- Reasoning / Thinking block (collapsible content, shown when reasoning text exists or thinking is done) -->
+        <div v-if="reasoning && (text || !loading)" class="mb-3">
           <button
-            class="flex items-center gap-1.5 text-[13px] font-medium transition-colors"
-            :class="loading && !text ? 'text-[#0066ff]' : 'text-[#999] hover:text-[#666]'"
+            class="flex items-center gap-1.5 text-[13px] font-medium transition-colors text-[#999] hover:text-[#666]"
             @click="reasoningExpanded = !reasoningExpanded"
           >
             <svg
-              v-if="loading && !text"
-              class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
-            >
-              <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-            </svg>
-            <svg
-              v-else
               xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
             >
               <path d="M12 2a8 8 0 0 0-8 8c0 3.4 2.1 6.3 5 7.4V20a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2.6c2.9-1.1 5-4 5-7.4a8 8 0 0 0-8-8z" />
               <line x1="9" y1="23" x2="15" y2="23" />
             </svg>
-            <span>{{ loading && !text ? '思考中...' : '已思考' }}</span>
+            <span>已思考</span>
             <svg
               xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"
               class="transition-transform" :class="reasoningExpanded ? 'rotate-180' : ''"
