@@ -10,8 +10,8 @@ use tracing::warn;
 
 use super::{ClaudeApiFormat, transform_stream};
 use crate::{
-    middleware::claude::{ClaudeContext, transforms_json},
-    types::claude::{CreateMessageResponse, StreamEvent},
+    middleware::claude::{ClaudeContext, transforms_json, tool_sim},
+    types::claude::{CreateMessageResponse, StreamEvent, ContentBlock, StopReason},
 };
 
 async fn parse_response<T>(resp: Response) -> Result<T, Response>
@@ -51,6 +51,41 @@ where
 /// # Returns
 ///
 /// The original or transformed response as appropriate
+/// Post-process a CreateMessageResponse to extract tool_call XML from text
+/// and convert to proper tool_use content blocks
+fn postprocess_tool_calls(mut response: CreateMessageResponse) -> CreateMessageResponse {
+    let mut new_content = Vec::new();
+    let mut found_tool = false;
+
+    for block in std::mem::take(&mut response.content) {
+        match block {
+            ContentBlock::Text { text, cache_control, citations } => {
+                let (remaining_text, tool_calls) = tool_sim::parse_tool_calls_from_text(&text);
+                if !tool_calls.is_empty() {
+                    found_tool = true;
+                    if !remaining_text.is_empty() {
+                        new_content.push(ContentBlock::Text {
+                            text: remaining_text,
+                            cache_control,
+                            citations,
+                        });
+                    }
+                    new_content.extend(tool_calls);
+                } else {
+                    new_content.push(ContentBlock::Text { text, cache_control, citations });
+                }
+            }
+            other => new_content.push(other),
+        }
+    }
+
+    response.content = new_content;
+    if found_tool {
+        response.stop_reason = Some(StopReason::ToolUse);
+    }
+    response
+}
+
 pub async fn to_oai(resp: Response) -> impl IntoResponse {
     let Some(cx) = resp.extensions().get::<ClaudeContext>() else {
         return resp;
@@ -60,7 +95,10 @@ pub async fn to_oai(resp: Response) -> impl IntoResponse {
     }
     if !cx.is_stream() {
         match parse_response::<CreateMessageResponse>(resp).await {
-            Ok(response) => return Json(transforms_json(response)).into_response(),
+            Ok(response) => {
+                let response = postprocess_tool_calls(response);
+                return Json(transforms_json(response)).into_response();
+            }
             Err(resp) => return resp,
         }
     }
@@ -82,6 +120,8 @@ pub async fn add_usage_info(resp: Response) -> impl IntoResponse {
             Ok(response) => response,
             Err(resp) => return resp,
         };
+        let response = postprocess_tool_calls(response);
+        let mut response = response;
         let output_tokens = response.count_tokens();
         usage.output_tokens = output_tokens;
         response.usage = Some(usage);

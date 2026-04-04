@@ -125,6 +125,7 @@ where
 }
 
 pub fn transforms_json(input: CreateMessageResponse) -> Value {
+    // Extract text content
     let content = input
         .content
         .iter()
@@ -133,6 +134,33 @@ pub fn transforms_json(input: CreateMessageResponse) -> Value {
             _ => None,
         })
         .collect::<String>();
+
+    // Extract tool_calls (from tool_use blocks)
+    let tool_calls: Vec<Value> = input
+        .content
+        .iter()
+        .filter_map(|block| match block {
+            crate::types::claude::ContentBlock::ToolUse { id, name, input, .. } => {
+                Some(serde_json::json!({
+                    "id": id,
+                    "type": "function",
+                    "function": {
+                        "name": name,
+                        "arguments": serde_json::to_string(input).unwrap_or_default()
+                    }
+                }))
+            }
+            _ => None,
+        })
+        .collect();
+
+    let mut message = serde_json::json!({
+        "role": "assistant",
+        "content": if content.is_empty() { Value::Null } else { Value::String(content) }
+    });
+    if !tool_calls.is_empty() {
+        message["tool_calls"] = Value::Array(tool_calls);
+    }
 
     let usage = input.usage.as_ref().map(|u| {
         let mut usage_json = serde_json::json!({
@@ -174,10 +202,7 @@ pub fn transforms_json(input: CreateMessageResponse) -> Value {
         "model": input.model,
         "choices": [{
             "index": 0,
-            "message": {
-                "role": "assistant",
-                "content": content
-            },
+            "message": message,
             "finish_reason": finish_reason
         }],
         "usage": usage

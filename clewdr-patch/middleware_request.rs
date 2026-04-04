@@ -289,7 +289,16 @@ where
     type Rejection = ClewdrError;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, Self::Rejection> {
-        let NormalizeRequest(body, format) = NormalizeRequest::from_request(req, &()).await?;
+        let NormalizeRequest(mut body, format) = NormalizeRequest::from_request(req, &()).await?;
+
+        // Tool simulation: inject tool defs into system, convert tool_use/tool_result history
+        let has_tools = body.tools.as_ref().is_some_and(|t| !t.is_empty());
+        if has_tools {
+            use super::tool_sim;
+            tool_sim::convert_tool_use_history_to_text(&mut body);
+            tool_sim::convert_tool_results_to_text(&mut body);
+            tool_sim::inject_tools_into_system(&mut body);
+        }
 
         // Check for test messages and respond appropriately
         if !body.stream.unwrap_or_default()
