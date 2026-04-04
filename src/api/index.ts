@@ -194,6 +194,50 @@ export function testProxyConnection(id: string): Promise<{ success: boolean; ip?
   return apiPost(`/codex/proxies/${encodeURIComponent(id)}/test`)
 }
 
+// ── Claude Pool API ──
+export function fetchClaudePoolStats(): Promise<{ total: number; active: number; expired: number; error: number; disabled: number }> {
+  return apiGet('/claude/pool/stats')
+}
+export function fetchClaudeAccounts(): Promise<any[]> {
+  return apiGet('/claude/pool/accounts')
+}
+export function removeClaudeAccount(id: string): Promise<void> {
+  return apiDelete(`/claude/pool/accounts/${encodeURIComponent(id)}`)
+}
+export function updateClaudeAccountApi(id: string, data: any): Promise<void> {
+  return apiPatch(`/claude/pool/accounts/${encodeURIComponent(id)}`, data)
+}
+export function refreshClaudeAccountApi(id: string): Promise<void> {
+  return apiPost(`/claude/pool/accounts/${encodeURIComponent(id)}/refresh`)
+}
+export function refreshAllClaudeAccountsApi(): Promise<{ refreshed: number; failed: number }> {
+  return apiPost('/claude/pool/refresh-all')
+}
+export function addClaudeToken(token: string, email?: string, proxy?: string): Promise<any> {
+  return apiPost('/claude/pool/add-token', { token, email, proxy })
+}
+export function startClaudeOAuthApi(): Promise<{ authUrl: string; state: string }> {
+  return apiPost('/claude/oauth/start')
+}
+export function completeClaudeOAuthApi(code: string, state: string, proxy?: string): Promise<any> {
+  return apiPost('/claude/oauth/complete', { code, state, proxy })
+}
+export function fetchClaudeProxies(): Promise<any[]> {
+  return apiGet('/claude/proxies')
+}
+export function createClaudeProxy(name: string, url: string): Promise<any> {
+  return apiPost('/claude/proxies', { name, url })
+}
+export function updateClaudeProxyApi(id: string, data: any): Promise<void> {
+  return apiPatch(`/claude/proxies/${encodeURIComponent(id)}`, data)
+}
+export function deleteClaudeProxy(id: string): Promise<void> {
+  return apiDelete(`/claude/proxies/${encodeURIComponent(id)}`)
+}
+export function testClaudeProxyApi(id: string): Promise<{ success: boolean; ip?: string; latency?: number; error?: string }> {
+  return apiPost(`/claude/proxies/${encodeURIComponent(id)}/test`)
+}
+
 export function fetchChatAPI<T = any>(
   prompt: string,
   options?: { conversationId?: string; parentMessageId?: string },

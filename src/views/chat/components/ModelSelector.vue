@@ -25,6 +25,13 @@ const MODEL_GROUPS = [
     ],
   },
   {
+    provider: 'Claude Pro',
+    models: [
+      { label: 'Claude Sonnet 4 (订阅)', value: 'claude-pool:claude-sonnet-4-20250514' },
+      { label: 'Claude Opus 4 (订阅)', value: 'claude-pool:claude-opus-4-20250918' },
+    ],
+  },
+  {
     provider: 'Google',
     models: [
       { label: 'Gemini 2.5 Pro', value: 'gemini-2.5-pro' },

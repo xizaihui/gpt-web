@@ -9,6 +9,7 @@ const collapsed = ref(false)
 
 const navItems = [
   { path: '/admin/pool', label: '号池管理', icon: 'users', description: '管理 ChatGPT 订阅账号' },
+  { path: '/admin/claude-pool', label: 'Claude 号池', icon: 'brain', description: '管理 Claude Pro 订阅账号' },
   { path: '/admin/proxies', label: '代理管理', icon: 'shield', description: '配置账号代理 IP' },
 ]
 

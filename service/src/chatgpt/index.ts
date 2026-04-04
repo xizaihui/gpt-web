@@ -3,6 +3,7 @@ import { sendResponse } from '../utils'
 import { isNotEmptyString } from '../utils/is'
 import type { RequestOptions } from './types'
 import { chatWithCodex, CODEX_MODELS } from '../codex'
+import { chatWithClaudePool, CLAUDE_POOL_MODELS } from '../claude-pool'
 
 dotenv.config()
 
@@ -401,13 +402,16 @@ async function chatReplyProcess(options: RequestOptions) {
   try {
     const useModel = requestModel || DEFAULT_MODEL
     const isCodex = useModel && useModel.startsWith('codex:')
-    const isClaude = useModel && (useModel.startsWith('claude-') || useModel.includes('claude'))
+    const isClaudePool = useModel && useModel.startsWith('claude-pool:')
+    const isClaude = !isClaudePool && useModel && (useModel.startsWith('claude-') || useModel.includes('claude'))
     const useBaseUrl = (reqBaseUrl && isNotEmptyString(reqBaseUrl)) ? reqBaseUrl : API_BASE_URL
     const useApiKey = (reqApiKey && isNotEmptyString(reqApiKey)) ? reqApiKey : API_KEY
 
     // Resolve actual model name for identity injection
     const actualModel = isCodex
       ? (CODEX_MODELS.find(m => m.id === useModel)?.codexModel || 'gpt-5.4')
+      : isClaudePool
+      ? (CLAUDE_POOL_MODELS.find(m => m.id === useModel)?.claudeModel || 'claude-sonnet-4-20250514')
       : useModel
 
     // Inject model identity into system message
@@ -419,6 +423,12 @@ async function chatReplyProcess(options: RequestOptions) {
         return sendResponse({ type: 'Fail', message: result.error || 'Codex API error' })
       }
       return sendResponse({ type: 'Success', data: { id: 'codex-' + Date.now(), text: '', role: 'assistant' } })
+    } else if (isClaudePool) {
+      const result = await chatWithClaudePool(actualModel, enrichedSystemMessage, history, message, onProgress, reasoning)
+      if (!result.success) {
+        return sendResponse({ type: 'Fail', message: result.error || 'Claude Pool API error' })
+      }
+      return sendResponse({ type: 'Success', data: { id: 'claude-pool-' + Date.now(), text: '', role: 'assistant' } })
     } else if (isClaude) {
       return await chatWithClaude(useModel, useBaseUrl, useApiKey, enrichedSystemMessage, history, message, files, temperature, onProgress, lastContext)
     } else {
