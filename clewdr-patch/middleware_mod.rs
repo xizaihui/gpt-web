@@ -75,6 +75,13 @@ impl ClaudeContext {
         }
     }
 
+    pub fn set_usage(&mut self, usage: Usage) {
+        match self {
+            ClaudeContext::Web(ctx) => ctx.usage = usage,
+            ClaudeContext::Code(ctx) => ctx.usage = usage,
+        }
+    }
+
     pub fn anthropic_beta(&self) -> Option<&str> {
         match self {
             ClaudeContext::Web(_) => None,

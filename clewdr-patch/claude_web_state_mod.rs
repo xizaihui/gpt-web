@@ -65,6 +65,7 @@ pub struct ActiveConv {
     pub conv_uuid: String,
     pub pool_key: String,   // composite: cookie_key:session_id
     pub msg_count: u32,
+    pub cumulative_tokens: u32, // total tokens in this conversation window (for cache stats)
     pub last_used_at: std::time::Instant,
     pub created_at: std::time::Instant,
 }
@@ -136,8 +137,12 @@ pub struct ClaudeWebState {
     pub usage: Usage,
     pub last_params: Option<CreateMessageParams>,
     pub active_conv_msg_count: u32,
-    /// Session ID from X-Session-Id header — binds conversation to a specific user/browser
+    /// Session ID from X-Session-Id header
     pub session_id: Option<String>,
+    /// Whether this request is reusing an existing active conversation
+    pub is_reusing_conv: bool,
+    /// Cumulative tokens in the reused conversation (for cache_read estimation)
+    pub reused_conv_tokens: u32,
 }
 
 impl ClaudeWebState {
@@ -160,6 +165,8 @@ impl ClaudeWebState {
             last_params: None,
             active_conv_msg_count: 0,
             session_id: None,
+            is_reusing_conv: false,
+            reused_conv_tokens: 0,
         }
     }
 
@@ -467,19 +474,25 @@ impl ClaudeWebState {
         let new_count = self.active_conv_msg_count + 1;
 
         if new_count < ACTIVE_CONV_MAX_MSGS {
-            // Return to active pool for reuse — like a real user continuing a conversation
+            // Accumulate tokens: previous cached + this request's input + output
+            let new_cumulative = self.reused_conv_tokens
+                + self.usage.input_tokens
+                + self.usage.output_tokens
+                + self.usage.cache_creation_input_tokens;
+            // Return to active pool for reuse
             if let Ok(mut map) = ACTIVE_CONV_MAP.lock() {
                 map.push(ActiveConv {
                     org_uuid: org_uuid.clone(),
                     conv_uuid: conv_uuid.clone(),
                     pool_key: self.conv_pool_key(),
                     msg_count: new_count,
+                    cumulative_tokens: new_cumulative,
                     last_used_at: std::time::Instant::now(),
                     created_at: std::time::Instant::now(),
                 });
                 info!(
-                    "[ACTIVE-CONV] returned {} to pool (msg {}/{})",
-                    conv_uuid, new_count, ACTIVE_CONV_MAX_MSGS
+                    "[ACTIVE-CONV] returned {} to pool (msg {}/{}, cumulative_tokens={})",
+                    conv_uuid, new_count, ACTIVE_CONV_MAX_MSGS, new_cumulative
                 );
             }
         } else {

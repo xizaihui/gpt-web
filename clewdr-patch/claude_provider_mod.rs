@@ -139,6 +139,9 @@ impl LLMProvider for ClaudeWebProvider {
             "[FIN] elapsed: {}s",
             format!("{}", elapsed.as_secs_f32()).green()
         );
+        // Update context usage with real cache stats from conversation reuse
+        let mut context = context;
+        context.set_usage(state.usage.clone());
         Ok(ClaudeProviderResponse { context, response })
     }
 }

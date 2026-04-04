@@ -54,6 +54,29 @@ impl ClaudeWebState {
                     // Report success to policy layer
                     state.policy_success();
 
+                    // Recalculate cache stats based on conversation reuse
+                    if state.is_reusing_conv && state.session_id.is_some() {
+                        // Reusing active conv: all previous tokens are cache_read
+                        let current_input = state.usage.input_tokens + state.usage.cache_creation_input_tokens;
+                        state.usage.cache_read_input_tokens = state.reused_conv_tokens;
+                        state.usage.cache_creation_input_tokens = 0;
+                        state.usage.input_tokens = current_input;
+                        info!(
+                            "[CACHE] reuse: cache_read={}, input={}, output={}",
+                            state.reused_conv_tokens, current_input, state.usage.output_tokens
+                        );
+                    } else {
+                        // New conversation: all input tokens are cache_creation
+                        let total = state.usage.input_tokens + state.usage.cache_creation_input_tokens;
+                        state.usage.cache_creation_input_tokens = total;
+                        state.usage.cache_read_input_tokens = 0;
+                        state.usage.input_tokens = 0;
+                        info!(
+                            "[CACHE] new: cache_creation={}, output={}",
+                            total, state.usage.output_tokens
+                        );
+                    }
+
                     // Clean chat in background (delayed deletion)
                     let clean_state = state.clone();
                     tokio::spawn(async move {
@@ -68,6 +91,8 @@ impl ClaudeWebState {
                             warn!("[CONV-POOL] Pre-create conv failed: {}", e);
                         }
                     });
+                    // Propagate updated usage (with cache stats) back to self
+                    self.usage = state.usage.clone();
                     return Ok(b);
                 }
                 Err(e) => {
@@ -108,8 +133,8 @@ impl ClaudeWebState {
     }
 
     /// Try to take an active (reusable) conversation from the active pool.
-    /// Returns None if no suitable conversation exists.
-    fn take_active_conv(&self, org_uuid: &str) -> Option<String> {
+    /// Returns (conv_uuid, cumulative_tokens) or None.
+    fn take_active_conv(&self, org_uuid: &str) -> Option<(String, u32)> {
         let mut map = ACTIVE_CONV_MAP.lock().ok()?;
         let pool_key = self.conv_pool_key();
         let idx = map.iter().position(|c| {
@@ -120,12 +145,13 @@ impl ClaudeWebState {
         })?;
         let conv = map.remove(idx);
         info!(
-            "[ACTIVE-CONV] reusing conversation {} (msg #{}/{})",
+            "[ACTIVE-CONV] reusing conversation {} (msg #{}/{}, cached_tokens={})",
             conv.conv_uuid,
             conv.msg_count + 1,
-            ACTIVE_CONV_MAX_MSGS
+            ACTIVE_CONV_MAX_MSGS,
+            conv.cumulative_tokens
         );
-        Some(conv.conv_uuid)
+        Some((conv.conv_uuid, conv.cumulative_tokens))
     }
 
     /// Return a conversation to the active pool after use, or retire it if limits exceeded.
@@ -145,6 +171,7 @@ impl ClaudeWebState {
                 conv_uuid: conv_uuid.to_string(),
                 pool_key: self.conv_pool_key(),
                 msg_count: new_count,
+                cumulative_tokens: 0, // unused in return_active_conv path
                 last_used_at: std::time::Instant::now(),
                 created_at: std::time::Instant::now(),
             });
@@ -266,11 +293,11 @@ impl ClaudeWebState {
         self.evict_idle_active_convs();
 
         // Priority: active conv (reuse) > pre-created pool > new creation
-        let (new_uuid, is_reusing) =
-            if let Some(conv_uuid) = self.take_active_conv(&org_uuid) {
-                (conv_uuid, true)
+        let (new_uuid, is_reusing, cached_tokens) =
+            if let Some((conv_uuid, cum_tokens)) = self.take_active_conv(&org_uuid) {
+                (conv_uuid, true, cum_tokens)
             } else if let Some(precreated) = self.take_precreated_conv(&org_uuid) {
-                (precreated, false)
+                (precreated, false, 0u32)
             } else {
                 // Create a new conversation (original path)
                 let uuid = uuid::Uuid::new_v4().to_string();
@@ -296,12 +323,14 @@ impl ClaudeWebState {
                     .check_claude()
                     .await?;
                 info!("[ACTIVE-CONV] created new conversation {}", uuid);
-                (uuid, false)
+                (uuid, false, 0u32)
             };
 
         self.conv_uuid = Some(new_uuid.to_string());
         self.active_conv_msg_count = 0;
-        debug!("Using conversation: {} (reusing={})", new_uuid, is_reusing);
+        self.is_reusing_conv = is_reusing;
+        self.reused_conv_tokens = cached_tokens;
+        debug!("Using conversation: {} (reusing={}, cached_tokens={})", new_uuid, is_reusing, cached_tokens);
 
         // preserve original params for possible post-call token accounting
         self.last_params = Some(p.clone());

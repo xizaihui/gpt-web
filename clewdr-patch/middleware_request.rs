@@ -323,37 +323,14 @@ where
 
         let total_input_tokens = body.count_tokens();
 
-        // Compute prompt cache stats (simulates Anthropic cache_control)
-        let (cache_creation, cache_read, net_input) = {
-            use crate::claude_web_state::PROMPT_CACHE;
-            match body.compute_cache_key() {
-                Some((hash, cached_tokens)) => {
-                    if PROMPT_CACHE.get(&hash).is_some() {
-                        // Cache exists — randomly decide hit or miss (20-80% hit rate)
-                        let roll = uuid::Uuid::new_v4().as_bytes()[0]; // 0-255
-                        // 20%-80% → threshold range 51-204 out of 255
-                        // Use a simple hash-based jitter for per-session variance
-                        let session_jitter = (hash & 0xFF) as u8; // 0-255 from hash
-                        let threshold = 51 + (session_jitter % 154); // 51-204 → ~20%-80%
-                        if roll < threshold {
-                            // Cache hit
-                            let net = total_input_tokens.saturating_sub(cached_tokens);
-                            (0u32, cached_tokens, net)
-                        } else {
-                            // Pretend miss even though cached
-                            let net = total_input_tokens.saturating_sub(cached_tokens);
-                            (cached_tokens, 0u32, net)
-                        }
-                    } else {
-                        // First time — always cache_creation
-                        PROMPT_CACHE.insert(hash, cached_tokens);
-                        let net = total_input_tokens.saturating_sub(cached_tokens);
-                        (cached_tokens, 0u32, net)
-                    }
-                }
-                None => (0u32, 0u32, total_input_tokens),
-            }
-        };
+        // Cache stats: based on whether we're reusing an active conversation.
+        // This is set later by the provider when it knows if a conv was reused.
+        // For now, store total_input_tokens; the provider will adjust cache fields
+        // after determining is_reusing from the active conv pool.
+        // Default: all tokens are new input (no cache).
+        let cache_creation = total_input_tokens;
+        let cache_read = 0u32;
+        let net_input = 0u32; // will be recalculated by provider
 
         let info = ClaudeWebContext {
             stream,
