@@ -20,40 +20,34 @@
 				height: 100vh;
 				background: #fff;
 			}
-			.loading-wrap .loader {
+			.loading-wrap .dots {
 				display: flex;
-				flex-direction: column;
-				gap: 10px;
+				gap: 6px;
 			}
-			.loading-wrap .bar {
-				height: 12px;
-				border-radius: 6px;
-				background: linear-gradient(90deg, #e8e8e8 25%, #f4f4f4 50%, #e8e8e8 75%);
-				background-size: 200% 100%;
-				animation: shimmer 1.5s ease-in-out infinite;
+			.loading-wrap .dot {
+				width: 10px;
+				height: 10px;
+				border-radius: 50%;
+				background: #b4b4b4;
+				animation: dot-pulse 1.2s ease-in-out infinite;
 			}
-			.loading-wrap .bar:nth-child(1) { width: 120px; }
-			.loading-wrap .bar:nth-child(2) { width: 180px; }
-			.loading-wrap .bar:nth-child(3) { width: 90px; }
-			@keyframes shimmer {
-				0% { background-position: 200% 0; }
-				100% { background-position: -200% 0; }
+			.loading-wrap .dot:nth-child(2) { animation-delay: 0.2s; }
+			.loading-wrap .dot:nth-child(3) { animation-delay: 0.4s; }
+			@keyframes dot-pulse {
+				0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+				40% { opacity: 1; transform: scale(1); }
 			}
 			@media (prefers-color-scheme: dark) {
 				body { background: #121212; }
 				.loading-wrap { background: #121212; }
-				.loading-wrap .bar {
-					background: linear-gradient(90deg, #2a2a2a 25%, #3a3a3a 50%, #2a2a2a 75%);
-					background-size: 200% 100%;
-					animation: shimmer 1.5s ease-in-out infinite;
-				}
+				.loading-wrap .dot { background: #666; }
 			}
 		</style>
 		<div class="loading-wrap">
-			<div class="loader">
-				<div class="bar"></div>
-				<div class="bar"></div>
-				<div class="bar"></div>
+			<div class="dots">
+				<div class="dot"></div>
+				<div class="dot"></div>
+				<div class="dot"></div>
 			</div>
 		</div>
 	</div>

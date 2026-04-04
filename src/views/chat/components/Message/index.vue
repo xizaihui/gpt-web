@@ -86,11 +86,11 @@ const cacheWriteTokens = computed(() => {
     <div v-else class="flex gap-3">
       <AvatarComponent :image="false" class="mt-1 flex-shrink-0" />
       <div class="min-w-0 flex-1">
-        <!-- Typing indicator — OpenAI shimmer style -->
-        <div v-if="loading && (!text || text.trim() === '') && !reasoning" class="py-1">
-          <div class="shimmer-line h-[14px] w-32 rounded-md" />
-          <div class="shimmer-line h-[14px] w-48 rounded-md mt-2" />
-          <div class="shimmer-line h-[14px] w-24 rounded-md mt-2" />
+        <!-- Typing indicator — pulsing dots -->
+        <div v-if="loading && (!text || text.trim() === '') && !reasoning" class="flex items-center gap-[5px] py-2">
+          <span class="typing-dot" />
+          <span class="typing-dot [animation-delay:0.2s]" />
+          <span class="typing-dot [animation-delay:0.4s]" />
         </div>
         <!-- Reasoning / Thinking block -->
         <div v-if="reasoning" class="mb-3">
@@ -157,13 +157,15 @@ const cacheWriteTokens = computed(() => {
 .action-btn {
   @apply p-1 text-[#888] transition-colors hover:text-[#0d0d0d];
 }
-.shimmer-line {
-  background: linear-gradient(90deg, #e8e8e8 25%, #f4f4f4 50%, #e8e8e8 75%);
-  background-size: 200% 100%;
-  animation: shimmer 1.5s ease-in-out infinite;
+.typing-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #b4b4b4;
+  animation: dot-pulse 1.2s ease-in-out infinite;
 }
-@keyframes shimmer {
-  0% { background-position: 200% 0; }
-  100% { background-position: -200% 0; }
+@keyframes dot-pulse {
+  0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
+  40% { opacity: 1; transform: scale(1); }
 }
 </style>
