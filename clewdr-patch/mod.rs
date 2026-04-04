@@ -203,13 +203,37 @@ impl ClaudeWebState {
     pub async fn request_cookie(&mut self) -> Result<CookieStatus, ClewdrError> {
         let res = self.cookie_actor_handle.request(None).await?;
         self.cookie = Some(res.to_owned());
-        // Always pull latest proxy/endpoint before building the client
-        self.proxy = CLEWDR_CONFIG.load().wreq_proxy.to_owned();
         self.endpoint = CLEWDR_CONFIG.load().endpoint();
+
+        // Per-cookie proxy takes priority over global proxy
+        let effective_proxy = if let Some(ref cookie_proxy) = res.proxy {
+            // This cookie has its own proxy configured
+            match Proxy::all(cookie_proxy) {
+                Ok(p) => {
+                    info!(
+                        "[PROXY] Using per-cookie proxy for {}…",
+                        &res.cookie.ellipse()
+                    );
+                    Some(p)
+                }
+                Err(e) => {
+                    warn!(
+                        "[PROXY] Failed to parse per-cookie proxy '{}': {}, falling back to global",
+                        cookie_proxy, e
+                    );
+                    CLEWDR_CONFIG.load().wreq_proxy.to_owned()
+                }
+            }
+        } else {
+            // No per-cookie proxy, use global
+            CLEWDR_CONFIG.load().wreq_proxy.to_owned()
+        };
+
+        self.proxy = effective_proxy.clone();
         let mut client = Client::builder()
             .cookie_store(true)
             .emulation(Emulation::Chrome136);
-        if let Some(ref proxy) = self.proxy {
+        if let Some(ref proxy) = effective_proxy {
             client = client.proxy(proxy.to_owned());
         }
         self.client = client.build().context(WreqSnafu {
@@ -265,52 +289,69 @@ impl ClaudeWebState {
     // ── Policy Layer methods ──
 
     /// Check if this cookie is allowed to make a request (rate limit + circuit breaker)
-    /// Returns Ok(()) if allowed, or Err with a message if blocked.
-    pub fn policy_check(&self) -> Result<(), ClewdrError> {
+    /// If rate limited, waits until the next slot is available instead of rejecting.
+    pub async fn policy_check(&self) -> Result<(), ClewdrError> {
         let cookie_key = self.cookie_cache_key();
         if cookie_key.is_empty() {
             return Ok(());
         }
 
-        let mut policies = COOKIE_POLICIES.lock().map_err(|_| ClewdrError::UnexpectedNone {
-            msg: "Policy lock poisoned",
-        })?;
-        let policy = policies.entry(cookie_key).or_default();
+        // Circuit breaker check
+        {
+            let mut policies = COOKIE_POLICIES.lock().map_err(|_| ClewdrError::UnexpectedNone {
+                msg: "Policy lock poisoned",
+            })?;
+            let policy = policies.entry(cookie_key.clone()).or_default();
 
-        // Circuit breaker: check if frozen
-        if let Some(frozen_until) = policy.frozen_until {
-            if std::time::Instant::now() < frozen_until {
-                let remaining = frozen_until.duration_since(std::time::Instant::now()).as_secs();
-                warn!("[POLICY] Cookie frozen, {}s remaining", remaining);
-                return Err(ClewdrError::BadRequest {
-                    msg: "Account temporarily frozen due to consecutive errors",
-                });
-            } else {
-                // Unfreeze
-                policy.frozen_until = None;
-                policy.consecutive_errors = 0;
-                info!("[POLICY] Cookie unfrozen, resuming");
+            if let Some(frozen_until) = policy.frozen_until {
+                if std::time::Instant::now() < frozen_until {
+                    let remaining = frozen_until.duration_since(std::time::Instant::now()).as_secs();
+                    warn!("[POLICY] Cookie frozen, {}s remaining", remaining);
+                    return Err(ClewdrError::BadRequest {
+                        msg: "Account temporarily frozen due to consecutive errors",
+                    });
+                } else {
+                    policy.frozen_until = None;
+                    policy.consecutive_errors = 0;
+                    info!("[POLICY] Cookie unfrozen, resuming");
+                }
             }
         }
 
-        // Rate limit: max 5 requests per minute per cookie
-        let now = std::time::Instant::now();
-        let one_min_ago = now - Duration::from_secs(60);
-        policy.request_times.retain(|t| *t > one_min_ago);
+        // Rate limit: max 10 requests per minute per cookie
+        // If over limit, WAIT until a slot opens up (don't reject)
+        loop {
+            let wait_duration = {
+                let mut policies = COOKIE_POLICIES.lock().map_err(|_| ClewdrError::UnexpectedNone {
+                    msg: "Policy lock poisoned",
+                })?;
+                let policy = policies.entry(cookie_key.clone()).or_default();
 
-        if policy.request_times.len() >= 5 {
-            let oldest = policy.request_times[0];
-            let wait = Duration::from_secs(60) - now.duration_since(oldest);
-            warn!("[POLICY] Rate limit: {} requests in last minute, wait {}s",
-                policy.request_times.len(), wait.as_secs());
-            return Err(ClewdrError::BadRequest {
-                msg: "Rate limited: too many requests per minute for this account",
-            });
+                let now = std::time::Instant::now();
+                let one_min_ago = now - Duration::from_secs(60);
+                policy.request_times.retain(|t| *t > one_min_ago);
+
+                if policy.request_times.len() < 10 {
+                    // Under limit — record and proceed
+                    policy.request_times.push(now);
+                    None
+                } else {
+                    // Over limit — calculate wait time
+                    let oldest = policy.request_times[0];
+                    let wait = Duration::from_secs(60).saturating_sub(now.duration_since(oldest));
+                    info!("[POLICY] Rate limit hit ({}/min), waiting {}s",
+                        policy.request_times.len(), wait.as_secs());
+                    Some(wait + Duration::from_millis(100)) // small buffer
+                }
+            };
+
+            match wait_duration {
+                None => break Ok(()),
+                Some(wait) => {
+                    tokio::time::sleep(wait).await;
+                }
+            }
         }
-
-        // Record this request
-        policy.request_times.push(now);
-        Ok(())
     }
 
     /// Report a successful request — reset consecutive error count

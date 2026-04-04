@@ -563,7 +563,9 @@ const keepAliveAgent = new http.Agent({
   maxFreeSockets: 5,
 })
 
-// ── Optimization: Warm-up pool for pre-bootstrapped connections (方案1) ──
+// ── Optimization: Warm-up pool (DISABLED — ClewdR now has internal bootstrap cache) ──
+// Previously we sent real API requests to warm ClewdR, but this wastes rate limit
+// and triggers the Policy Layer. ClewdR's bootstrap cache handles this now.
 interface WarmSlot {
   ready: boolean
   lastWarm: number
@@ -571,54 +573,23 @@ interface WarmSlot {
 }
 
 const warmPool: WarmSlot = {
-  ready: false,
-  lastWarm: 0,
+  ready: true, // Always consider warm since ClewdR caches internally
+  lastWarm: Date.now(),
   warming: false,
 }
 
-// Pre-warm ClewdR connection by sending a minimal request
-// This forces ClewdR to bootstrap + establish TLS connection to claude.ai
+// Warm-up is now a no-op — ClewdR's bootstrap cache (5min TTL) handles this
 async function warmUpClewdR(): Promise<void> {
-  if (warmPool.warming) return
-  warmPool.warming = true
-  try {
-    const url = `${CLEWDR_BASE_URL}/v1/chat/completions`
-    const response = await fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${CLEWDR_API_KEY}`,
-        'Connection': 'keep-alive',
-      },
-      body: JSON.stringify({
-        model: 'claude-sonnet-4-6',
-        messages: [{ role: 'user', content: 'hi' }],
-        max_tokens: 1,
-        stream: false,
-      }),
-    })
-    if (response.ok) {
-      await response.text() // drain body
-      warmPool.ready = true
-      warmPool.lastWarm = Date.now()
-      console.log('[ClaudePool/ClewdR] Warm-up successful, connection pre-established')
-    }
-  } catch (e: any) {
-    console.warn('[ClaudePool/ClewdR] Warm-up failed:', e.message)
-  }
-  warmPool.warming = false
+  // No-op: ClewdR has internal bootstrap cache + conversation pre-creation
+  warmPool.ready = true
+  warmPool.lastWarm = Date.now()
 }
 
-// Auto warm-up every 4 minutes (ClewdR idle timeout is ~5min)
-setInterval(() => {
-  const age = Date.now() - warmPool.lastWarm
-  if (age > 4 * 60 * 1000) {
-    warmUpClewdR()
-  }
-}, 60 * 1000)
+// Disabled: no more periodic warm-up requests
+// setInterval(() => { ... }, 60 * 1000)
 
-// Initial warm-up on startup
-setTimeout(() => warmUpClewdR(), 3000)
+// Disabled: no initial warm-up needed
+// setTimeout(() => warmUpClewdR(), 3000)
 
 // ── Optimization: Request pipeline (方案2 - connection reuse) ──
 // Track active requests to avoid concurrent bursts

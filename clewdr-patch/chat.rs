@@ -36,7 +36,7 @@ impl ClaudeWebState {
             let cookie = state.request_cookie().await?;
 
             // Policy check: rate limit + circuit breaker
-            state.policy_check()?;
+            state.policy_check().await?;
 
             // Random delay between requests (3-8 seconds) to mimic human behavior
             // Skip delay on first request after warm-up
