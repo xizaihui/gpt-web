@@ -14,6 +14,9 @@ import path from 'path'
 import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
+import * as dotenv from 'dotenv'
+
+dotenv.config()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const DATA_DIR = path.join(__dirname, '..', 'data')
@@ -547,6 +550,10 @@ export async function completeClaudeOAuth(code: string, state: string, proxy?: s
 }
 
 // ── Claude Chat API (Messages API) ──
+// ── ClewdR Configuration ──
+const CLEWDR_BASE_URL = process.env.CLEWDR_BASE_URL || 'http://216.167.78.220:8484'
+const CLEWDR_API_KEY = process.env.CLEWDR_API_KEY || ''
+
 export async function chatWithClaudePool(
   model: string,
   systemMessage: string | undefined,
@@ -555,13 +562,11 @@ export async function chatWithClaudePool(
   onProgress: ((data: any) => void) | undefined,
   reasoning?: string,
 ): Promise<{ success: boolean; error?: string }> {
-  const account = getNextClaudeAccount()
-  if (!account) {
-    return { success: false, error: 'Claude 号池中没有可用账号，请添加授权' }
-  }
-
-  // Build messages in Anthropic format
+  // Build messages in OpenAI format (ClewdR accepts this)
   const messages: Array<{ role: string; content: string }> = []
+  if (systemMessage) {
+    messages.push({ role: 'system', content: systemMessage })
+  }
   if (history && Array.isArray(history)) {
     for (const msg of history) {
       messages.push({ role: msg.role, content: msg.content })
@@ -576,63 +581,34 @@ export async function chatWithClaudePool(
     stream: true,
   }
 
-  // System message — inject Claude Code identity prefix (critical for anti-detection)
-  const sysText = systemMessage
-    ? `${CLAUDE_CODE_SYSTEM_PREFIX}\n\n${systemMessage}`
-    : CLAUDE_CODE_SYSTEM_PREFIX
-  requestBody.system = [{ type: 'text', text: sysText, cache_control: { type: 'ephemeral' } }]
-
-  // Extended thinking (use interleaved thinking beta)
-  if (reasoning && reasoning !== 'none') {
-    requestBody.thinking = { type: 'enabled', budget_tokens: 10000 }
+  const url = `${CLEWDR_BASE_URL}/v1/chat/completions`
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${CLEWDR_API_KEY}`,
   }
 
-  const url = `${API_BASE_URL}/v1/messages?beta=true`
-  const headers = buildClaudeHeaders(account.accessToken, model)
-
-  console.log(`[ClaudePool] POST ${url} | model: ${model} | account: ${account.email} | msgs: ${messages.length}`)
+  console.log(`[ClaudePool/ClewdR] POST ${url} | model: ${model} | msgs: ${messages.length}`)
 
   try {
-    const proxyUrl = getProxyUrl(account.proxy)
-    const response = await proxyFetch(url, {
+    const response = await fetch(url, {
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),
-      proxy: proxyUrl,
-    } as any)
+    })
 
     if (!response.ok) {
       const errorText = await response.text()
-      const errMsg = `Claude API error ${response.status}: ${errorText.slice(0, 200)}`
-      recordClaudeError(account.id, errMsg)
-
-      if (response.status === 401 || response.status === 403) {
-        const refreshResult = await refreshClaudeAccount(account.id)
-        if (refreshResult.success) {
-          return chatWithClaudePool(model, systemMessage, history, message, onProgress, reasoning)
-        }
-        return { success: false, error: `Claude OAuth 令牌已过期 (${account.email})，刷新失败` }
-      }
-
-      // Rate limit / overloaded — respect retry-after, try another account
-      if (response.status === 429 || response.status === 529) {
-        const retryAfter = parseInt(response.headers.get('retry-after') || '5')
-        console.log(`[ClaudePool] Rate limited (${response.status}), retry-after: ${retryAfter}s, account: ${account.email}`)
-        // Mark account temporarily, try next
-        return { success: false, error: `Claude 限流中，请稍后重试 (${retryAfter}s)` }
-      }
-
+      const errMsg = `ClewdR error ${response.status}: ${errorText.slice(0, 200)}`
+      console.error(`[ClaudePool/ClewdR] ${errMsg}`)
       return { success: false, error: errMsg }
     }
 
-    // Parse SSE stream
+    // Parse SSE stream (OpenAI format from ClewdR)
     const reader = response.body as any
     const decoder = new TextDecoder()
     let fullText = ''
-    let thinkingText = ''
     let buffer = ''
     let responseModel = model
-    let finalUsage: any = null
 
     for await (const chunk of reader) {
       buffer += decoder.decode(chunk, { stream: true })
@@ -647,84 +623,26 @@ export async function chatWithClaudePool(
 
         try {
           const parsed = JSON.parse(data)
-          const eventType = parsed.type
-
-          // Content text delta
-          if (eventType === 'content_block_delta' && parsed.delta?.type === 'text_delta') {
-            fullText += parsed.delta.text
+          const delta = parsed.choices?.[0]?.delta
+          if (delta?.content) {
+            fullText += delta.content
             onProgress?.({
-              id: parsed.index || 'msg',
+              id: parsed.id || 'msg',
               text: fullText,
-              reasoning: thinkingText || undefined,
               role: 'assistant',
               model: responseModel,
               detail: parsed,
             })
           }
-
-          // Thinking delta
-          if (eventType === 'content_block_delta' && parsed.delta?.type === 'thinking_delta') {
-            thinkingText += parsed.delta.thinking
-            onProgress?.({
-              id: 'thinking',
-              text: fullText,
-              reasoning: thinkingText,
-              role: 'assistant',
-              model: responseModel,
-              detail: parsed,
-            })
-          }
-
-          // Message start — get model
-          if (eventType === 'message_start' && parsed.message) {
-            responseModel = parsed.message.model || model
-            if (reasoning && reasoning !== 'none') {
-              responseModel += '-thinking'
-            }
-          }
-
-          // Message delta — usage
-          if (eventType === 'message_delta' && parsed.usage) {
-            finalUsage = {
-              prompt_tokens: 0,
-              completion_tokens: parsed.usage.output_tokens || 0,
-              total_tokens: parsed.usage.output_tokens || 0,
-            }
-          }
-
-          // Message start usage (input tokens)
-          if (eventType === 'message_start' && parsed.message?.usage) {
-            const u = parsed.message.usage
-            if (!finalUsage) finalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
-            finalUsage.prompt_tokens = u.input_tokens || 0
-            finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + (finalUsage.completion_tokens || 0)
-            if (u.cache_read_input_tokens || u.cache_creation_input_tokens) {
-              finalUsage.prompt_tokens_details = {
-                cached_tokens: u.cache_read_input_tokens || 0,
-                cache_write_tokens: u.cache_creation_input_tokens || 0,
-              }
-            }
-          }
+          if (parsed.model) responseModel = parsed.model
         } catch { /* skip */ }
       }
     }
 
-    // Final usage update
-    if (finalUsage) {
-      finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + (finalUsage.completion_tokens || 0)
-      console.log(`[ClaudePool] usage (${account.email}):`, JSON.stringify(finalUsage))
-      onProgress?.({
-        id: 'usage',
-        text: fullText,
-        role: 'assistant',
-        model: responseModel,
-        usage: finalUsage,
-      })
-    }
-
+    console.log(`[ClaudePool/ClewdR] done | model: ${responseModel} | chars: ${fullText.length}`)
     return { success: true }
   } catch (e: any) {
-    recordClaudeError(account.id, e.message)
+    console.error(`[ClaudePool/ClewdR] error:`, e.message)
     return { success: false, error: e.message }
   }
 }
