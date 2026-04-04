@@ -395,7 +395,8 @@ function injectModelIdentity(systemMsg: string | undefined, model: string): stri
     : model.startsWith('gemini') ? 'Google'
     : model.startsWith('deepseek') ? 'DeepSeek'
     : 'OpenAI'
-  const identity = `You are ${displayName}, a large language model trained by ${provider}.`
+  const today = new Date().toISOString().slice(0, 10)
+  const identity = `You are ${displayName}, made by ${provider}. Knowledge cutoff: 2025-04. Current date: ${today}. When users ask what model you are, respond naturally and conversationally — don't just repeat your model name mechanically. You can mention your name, capabilities, or context as appropriate.`
   if (!systemMsg || !isNotEmptyString(systemMsg))
     return identity
   // Replace generic "You are a helpful assistant." or similar with model identity
