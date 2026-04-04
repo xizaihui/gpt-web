@@ -38,12 +38,8 @@ impl ClaudeWebState {
             // Policy check: rate limit + circuit breaker
             state.policy_check().await?;
 
-            // Random delay between requests (3-8 seconds) to mimic human behavior
-            // Skip delay on first request after warm-up
-            if i == 0 {
-                let delay_ms = 500 + (uuid::Uuid::new_v4().as_bytes()[0] as u64 % 1500); // 0.5-2s
-                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
-            }
+            // Random delay removed — rate limit (10/min) is sufficient for safety
+            // Human-like pacing is handled at the request frequency level, not per-request delay
 
             // bootstrap uses cache (fast path) or full bootstrap (slow path)
             let web_res = async { state.bootstrap().await.and(state.send_chat(p).await) };
