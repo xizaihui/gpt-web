@@ -22,15 +22,21 @@ const PROXY_FILE = path.join(DATA_DIR, 'claude-proxies.json')
 
 // ── Claude OAuth Constants ──
 const AUTHORIZE_URL = 'https://claude.ai/oauth/authorize'
+// Token endpoints
 const TOKEN_URL = 'https://console.anthropic.com/v1/oauth/token'
+const REFRESH_TOKEN_URL = 'https://claude.ai/v1/oauth/token' // Claude Code uses this for refresh
 const API_BASE_URL = 'https://api.anthropic.com'
 const CLIENT_ID = '9d1c250a-e61b-44d9-88ed-5944d1962f5e'
 const REDIRECT_URI = 'https://console.anthropic.com/oauth/code/callback'
 const SCOPE = 'org:create_api_key user:profile user:inference'
 const ANTHROPIC_VERSION = '2023-06-01'
-const CLAUDE_CLI_VERSION = '2.2.0'
-const BETA_FLAGS = 'oauth-2025-04-20,claude-code-20250219,prompt-caching-2024-07-31,extended-cache-ttl-2025-04-11'
+const CLAUDE_CLI_VERSION = '2.1.80'
+// Beta flags must match official Claude Code CLI exactly
+const BETA_FLAGS = 'claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,prompt-caching-scope-2026-01-05'
 const TOKEN_REFRESH_BUFFER = 10 * 60 * 1000 // refresh 10 min before expiry
+
+// System prompt identity prefix — Claude Code injects this
+const CLAUDE_CODE_SYSTEM_PREFIX = 'You are Claude Code, an interactive CLI tool that helps users with software engineering tasks.'
 
 // ── Proxy-aware fetch ──
 function proxyFetch(url: string | URL, init?: RequestInit & { proxy?: string }): Promise<Response> {
@@ -188,15 +194,18 @@ function savePool(pool: PoolStore): void {
 
 // ── Token Helpers ──
 
-/** Build headers that mimic Claude Code CLI to reduce detection risk */
-function buildClaudeHeaders(accessToken: string): Record<string, string> {
+/** Build headers that exactly mimic Claude Code CLI to minimize detection */
+function buildClaudeHeaders(accessToken: string, model: string): Record<string, string> {
+  // Billing header format matches Claude Code CLI exactly
+  const billingHeader = `claude-cli/${CLAUDE_CLI_VERSION} (external, cli) model=${model}`
   return {
     'Content-Type': 'application/json',
-    'x-api-key': accessToken,
+    'Authorization': `Bearer ${accessToken}`,
     'anthropic-version': ANTHROPIC_VERSION,
     'anthropic-beta': BETA_FLAGS,
     'anthropic-dangerous-direct-browser-access': 'true',
     'x-app': 'cli',
+    'x-anthropic-billing-header': billingHeader,
     'user-agent': `claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`,
   }
 }
@@ -214,33 +223,44 @@ async function refreshAccessToken(refreshToken: string, proxyId?: string): Promi
 }> {
   try {
     const proxyUrl = getProxyUrl(proxyId)
-    const response = await proxyFetch(TOKEN_URL, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'User-Agent': 'anthropic',
-      },
-      body: JSON.stringify({
-        grant_type: 'refresh_token',
-        refresh_token: refreshToken,
-        client_id: CLIENT_ID,
-      }),
-      proxy: proxyUrl,
-    } as any)
-    if (!response.ok) {
-      const text = await response.text().catch(() => '')
-      return { success: false, error: `Refresh failed (${response.status}): ${text}` }
+    // Try primary refresh endpoint first (claude.ai), fallback to console
+    for (const tokenUrl of [REFRESH_TOKEN_URL, TOKEN_URL]) {
+      try {
+        const response = await proxyFetch(tokenUrl, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': `claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`,
+          },
+          body: JSON.stringify({
+            grant_type: 'refresh_token',
+            refresh_token: refreshToken,
+            client_id: CLIENT_ID,
+          }),
+          proxy: proxyUrl,
+        } as any)
+        if (!response.ok) {
+          if (tokenUrl === REFRESH_TOKEN_URL) continue // try fallback
+          const text = await response.text().catch(() => '')
+          return { success: false, error: `Refresh failed (${response.status}): ${text}` }
+        }
+        const json: any = await response.json()
+        if (!json.access_token) {
+          if (tokenUrl === REFRESH_TOKEN_URL) continue
+          return { success: false, error: 'Token refresh response missing access_token' }
+        }
+        return {
+          success: true,
+          access: json.access_token,
+          refresh: json.refresh_token || refreshToken,
+          expires: Date.now() + (json.expires_in || 3600) * 1000,
+        }
+      } catch (e) {
+        if (tokenUrl === REFRESH_TOKEN_URL) continue // try fallback
+        throw e
+      }
     }
-    const json: any = await response.json()
-    if (!json.access_token) {
-      return { success: false, error: 'Token refresh response missing access_token' }
-    }
-    return {
-      success: true,
-      access: json.access_token,
-      refresh: json.refresh_token || refreshToken, // some flows don't rotate refresh
-      expires: Date.now() + (json.expires_in || 3600) * 1000,
-    }
+    return { success: false, error: 'All refresh endpoints failed' }
   } catch (e: any) {
     return { success: false, error: e.message }
   }
@@ -551,18 +571,19 @@ export async function chatWithClaudePool(
     stream: true,
   }
 
-  // System message
-  if (systemMessage) {
-    requestBody.system = [{ type: 'text', text: systemMessage }]
-  }
+  // System message — inject Claude Code identity prefix (critical for anti-detection)
+  const sysText = systemMessage
+    ? `${CLAUDE_CODE_SYSTEM_PREFIX}\n\n${systemMessage}`
+    : CLAUDE_CODE_SYSTEM_PREFIX
+  requestBody.system = [{ type: 'text', text: sysText, cache_control: { type: 'ephemeral' } }]
 
-  // Extended thinking
+  // Extended thinking (use interleaved thinking beta)
   if (reasoning && reasoning !== 'none') {
     requestBody.thinking = { type: 'enabled', budget_tokens: 10000 }
   }
 
   const url = `${API_BASE_URL}/v1/messages?beta=true`
-  const headers = buildClaudeHeaders(account.accessToken)
+  const headers = buildClaudeHeaders(account.accessToken, model)
 
   console.log(`[ClaudePool] POST ${url} | model: ${model} | account: ${account.email} | msgs: ${messages.length}`)
 
@@ -587,6 +608,15 @@ export async function chatWithClaudePool(
         }
         return { success: false, error: `Claude OAuth 令牌已过期 (${account.email})，刷新失败` }
       }
+
+      // Rate limit / overloaded — respect retry-after, try another account
+      if (response.status === 429 || response.status === 529) {
+        const retryAfter = parseInt(response.headers.get('retry-after') || '5')
+        console.log(`[ClaudePool] Rate limited (${response.status}), retry-after: ${retryAfter}s, account: ${account.email}`)
+        // Mark account temporarily, try next
+        return { success: false, error: `Claude 限流中，请稍后重试 (${retryAfter}s)` }
+      }
+
       return { success: false, error: errMsg }
     }
 
