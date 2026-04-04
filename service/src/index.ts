@@ -14,11 +14,7 @@ import {
   listProxies, addProxy, removeProxy, updateProxy, testProxy,
 } from './codex'
 import {
-  listClaudeAccounts, addClaudeAccount, addFromSetupToken, removeClaudeAccount,
-  updateClaudeAccount, refreshClaudeAccount, refreshAllClaudeAccounts,
-  getClaudePoolStats, startClaudeOAuth, completeClaudeOAuth,
-  listClaudeProxies, addClaudeProxy, removeClaudeProxy, updateClaudeProxy, testClaudeProxy,
-  CLAUDE_POOL_MODELS, probeClaudeAccount,
+  CLAUDE_POOL_MODELS,
 } from './claude-pool'
 
 const app = express()
@@ -481,113 +477,124 @@ router.post('/codex/proxies/:id/test', auth, async (req, res) => {
   }
 })
 
-// ── Claude Pool API ──
+// ── ClewdR Admin API (proxy to ClewdR backend) ──
 
-router.get('/claude/pool/stats', auth, async (_req, res) => {
-  try { res.json({ status: 'Success', data: getClaudePoolStats() }) }
-  catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
+const CLEWDR_ADMIN_URL = process.env.CLEWDR_BASE_URL || 'http://216.167.78.220:8484'
+const CLEWDR_ADMIN_PW = process.env.CLEWDR_ADMIN_KEY || 'e4C4FFLtyvwXA4fcabZC8FNqqHvRs5K4kW9jwmpEKf7B4sKcDebTqTVmMcpSdsnM'
 
-router.get('/claude/pool/accounts', auth, async (_req, res) => {
-  try { res.json({ status: 'Success', data: listClaudeAccounts() }) }
-  catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
+async function clewdrFetch(path: string, options: any = {}): Promise<any> {
+  const url = `${CLEWDR_ADMIN_URL}${path}`
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${CLEWDR_ADMIN_PW}`,
+      ...options.headers,
+    },
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`ClewdR ${res.status}: ${text.slice(0, 200)}`)
+  }
+  const contentType = res.headers.get('content-type') || ''
+  if (contentType.includes('json')) return res.json()
+  return res.text()
+}
 
-router.delete('/claude/pool/accounts/:id', auth, async (req, res) => {
+// Get all cookies (accounts)
+router.get('/clewdr/cookies', auth, async (_req, res) => {
   try {
-    removeClaudeAccount(req.params.id)
-    res.json({ status: 'Success', data: null })
+    const data = await clewdrFetch('/api/cookies?refresh=true')
+    res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.patch('/claude/pool/accounts/:id', auth, async (req, res) => {
+// Add a cookie (account) — ClewdR uses /api/cookie (singular) for POST
+router.post('/clewdr/cookies', auth, async (req, res) => {
   try {
-    updateClaudeAccount(req.params.id, req.body)
-    res.json({ status: 'Success', data: null })
+    const { cookie, proxy } = req.body
+    if (!cookie) throw new Error('cookie is required')
+    const body: any = { cookie }
+    if (proxy) body.proxy = proxy
+    await clewdrFetch('/api/cookie', {
+      method: 'POST',
+      body: JSON.stringify(body),
+    })
+    res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/claude/pool/accounts/:id/refresh', auth, async (req, res) => {
+// Delete a cookie (account) — ClewdR uses /api/cookie (singular) for DELETE
+router.delete('/clewdr/cookies', auth, async (req, res) => {
   try {
-    const result = await refreshClaudeAccount(req.params.id)
-    res.json({ status: result.success ? 'Success' : 'Fail', message: result.error, data: null })
+    const { cookie } = req.body
+    if (!cookie) throw new Error('cookie is required')
+    await clewdrFetch('/api/cookie', {
+      method: 'DELETE',
+      body: JSON.stringify({ cookie }),
+    })
+    res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/claude/pool/refresh-all', auth, async (_req, res) => {
+// Update cookie — ClewdR uses /api/cookie (singular) for PUT
+router.put('/clewdr/cookies', auth, async (req, res) => {
   try {
-    const result = await refreshAllClaudeAccounts()
-    res.json({ status: 'Success', data: result })
+    await clewdrFetch('/api/cookie', {
+      method: 'PUT',
+      body: JSON.stringify(req.body),
+    })
+    res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-// Add via setup-token
-router.post('/claude/pool/add-token', auth, async (req, res) => {
+// Get ClewdR config
+router.get('/clewdr/config', auth, async (_req, res) => {
   try {
-    const { token, email, proxy } = req.body
-    if (!token) throw new Error('Token is required')
-    const account = addFromSetupToken(token, { email, proxy })
-    if (!account) throw new Error('无法解析 token，请检查格式')
-    res.json({ status: 'Success', data: account })
+    const data = await clewdrFetch('/api/config')
+    res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-// OAuth flow
-router.post('/claude/oauth/start', auth, async (_req, res) => {
+// Update ClewdR config
+router.post('/clewdr/config', auth, async (req, res) => {
   try {
-    const result = startClaudeOAuth()
-    res.json({ status: 'Success', data: result })
+    await clewdrFetch('/api/config', {
+      method: 'POST',
+      body: JSON.stringify(req.body),
+    })
+    res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/claude/oauth/complete', auth, async (req, res) => {
+// Get available models
+router.get('/clewdr/models', auth, async (_req, res) => {
   try {
-    const { code, state, proxy } = req.body
-    const result = await completeClaudeOAuth(code, state, proxy)
-    res.json({ status: result.success ? 'Success' : 'Fail', message: result.error, data: result.account })
+    const data = await clewdrFetch('/api/models')
+    res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-// Claude proxies
-router.get('/claude/proxies', auth, async (_req, res) => {
-  try { res.json({ status: 'Success', data: listClaudeProxies() }) }
-  catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.post('/claude/proxies', auth, async (req, res) => {
+// Test a cookie by sending a minimal request
+router.post('/clewdr/test', auth, async (req, res) => {
   try {
-    const { name, url } = req.body
-    const proxy = addClaudeProxy(name || 'Unnamed', url)
-    res.json({ status: 'Success', data: proxy })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.patch('/claude/proxies/:id', auth, async (req, res) => {
-  try {
-    updateClaudeProxy(req.params.id, req.body)
-    res.json({ status: 'Success', data: null })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.delete('/claude/proxies/:id', auth, async (req, res) => {
-  try {
-    removeClaudeProxy(req.params.id)
-    res.json({ status: 'Success', data: null })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.post('/claude/proxies/:id/test', auth, async (req, res) => {
-  try {
-    const result = await testClaudeProxy(req.params.id)
-    res.json({ status: 'Success', data: result })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-// Probe account: test which models are available
-router.post('/claude/pool/accounts/:id/probe', auth, async (req, res) => {
-  try {
-    const result = await probeClaudeAccount(req.params.id)
-    res.json({ status: 'Success', data: result })
+    const apiKey = process.env.CLEWDR_API_KEY || ''
+    const testRes = await fetch(`${CLEWDR_ADMIN_URL}/v1/chat/completions`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${apiKey}`,
+      },
+      body: JSON.stringify({
+        model: req.body.model || 'claude-sonnet-4-6',
+        messages: [{ role: 'user', content: 'say ok' }],
+        max_tokens: 5,
+        stream: false,
+      }),
+    })
+    const data = await testRes.json()
+    const content = data?.choices?.[0]?.message?.content || ''
+    res.json({ status: 'Success', data: { ok: testRes.ok, content, statusCode: testRes.status } })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 

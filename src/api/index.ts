@@ -77,8 +77,13 @@ async function apiPatch<T = any>(path: string, data?: any): Promise<T> {
   return json.data
 }
 
-async function apiDelete<T = any>(path: string): Promise<T> {
-  const res = await fetch(apiUrl(path), { method: 'DELETE', headers: await authHeaders() })
+async function apiDelete<T = any>(path: string, body?: any): Promise<T> {
+  const opts: any = { method: 'DELETE', headers: await authHeaders() }
+  if (body) {
+    opts.headers['Content-Type'] = 'application/json'
+    opts.body = JSON.stringify(body)
+  }
+  const res = await fetch(apiUrl(path), opts)
   const json = await res.json()
   if (json.status !== 'Success') throw new Error(json.message || 'API error')
   return json.data
@@ -194,51 +199,30 @@ export function testProxyConnection(id: string): Promise<{ success: boolean; ip?
   return apiPost(`/codex/proxies/${encodeURIComponent(id)}/test`)
 }
 
-// ── Claude Pool API ──
-export function fetchClaudePoolStats(): Promise<{ total: number; active: number; expired: number; error: number; disabled: number }> {
-  return apiGet('/claude/pool/stats')
+// ── ClewdR Admin API ──
+export function fetchClewdrCookies(): Promise<any> {
+  return apiGet('/clewdr/cookies')
 }
-export function fetchClaudeAccounts(): Promise<any[]> {
-  return apiGet('/claude/pool/accounts')
+export function addClewdrCookie(cookie: string, proxy?: string): Promise<void> {
+  return apiPost('/clewdr/cookies', { cookie, proxy })
 }
-export function removeClaudeAccount(id: string): Promise<void> {
-  return apiDelete(`/claude/pool/accounts/${encodeURIComponent(id)}`)
+export function deleteClewdrCookie(cookie: string): Promise<void> {
+  return apiDelete('/clewdr/cookies', { cookie })
 }
-export function updateClaudeAccountApi(id: string, data: any): Promise<void> {
-  return apiPatch(`/claude/pool/accounts/${encodeURIComponent(id)}`, data)
+export function updateClewdrCookie(data: any): Promise<void> {
+  return apiPut('/clewdr/cookies', data)
 }
-export function refreshClaudeAccountApi(id: string): Promise<void> {
-  return apiPost(`/claude/pool/accounts/${encodeURIComponent(id)}/refresh`)
+export function fetchClewdrConfig(): Promise<any> {
+  return apiGet('/clewdr/config')
 }
-export function refreshAllClaudeAccountsApi(): Promise<{ refreshed: number; failed: number }> {
-  return apiPost('/claude/pool/refresh-all')
+export function updateClewdrConfig(data: any): Promise<void> {
+  return apiPost('/clewdr/config', data)
 }
-export function addClaudeToken(token: string, email?: string, proxy?: string): Promise<any> {
-  return apiPost('/claude/pool/add-token', { token, email, proxy })
+export function fetchClewdrModels(): Promise<any> {
+  return apiGet('/clewdr/models')
 }
-export function startClaudeOAuthApi(): Promise<{ authUrl: string; state: string }> {
-  return apiPost('/claude/oauth/start')
-}
-export function completeClaudeOAuthApi(code: string, state: string, proxy?: string): Promise<any> {
-  return apiPost('/claude/oauth/complete', { code, state, proxy })
-}
-export function fetchClaudeProxies(): Promise<any[]> {
-  return apiGet('/claude/proxies')
-}
-export function createClaudeProxy(name: string, url: string): Promise<any> {
-  return apiPost('/claude/proxies', { name, url })
-}
-export function updateClaudeProxyApi(id: string, data: any): Promise<void> {
-  return apiPatch(`/claude/proxies/${encodeURIComponent(id)}`, data)
-}
-export function deleteClaudeProxy(id: string): Promise<void> {
-  return apiDelete(`/claude/proxies/${encodeURIComponent(id)}`)
-}
-export function testClaudeProxyApi(id: string): Promise<{ success: boolean; ip?: string; latency?: number; error?: string }> {
-  return apiPost(`/claude/proxies/${encodeURIComponent(id)}/test`)
-}
-export function probeClaudeAccountApi(id: string): Promise<{ valid: boolean; models: Array<{ model: string; available: boolean; error?: string }> }> {
-  return apiPost(`/claude/pool/accounts/${encodeURIComponent(id)}/probe`)
+export function testClewdr(model?: string): Promise<any> {
+  return apiPost('/clewdr/test', { model })
 }
 
 export function fetchChatAPI<T = any>(
