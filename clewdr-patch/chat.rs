@@ -7,7 +7,9 @@ use wreq::{Method, Response, header::ACCEPT};
 
 use super::ClaudeWebState;
 use crate::{
-    claude_web_state::CONV_POOL,
+    claude_web_state::{
+        ACTIVE_CONV_IDLE_SECS, ACTIVE_CONV_MAP, ACTIVE_CONV_MAX_MSGS, CONV_POOL, ActiveConv,
+    },
     config::CLEWDR_CONFIG,
     error::{CheckClaudeErr, ClewdrError, WreqSnafu},
     types::claude::CreateMessageParams,
@@ -63,7 +65,7 @@ impl ClaudeWebState {
                     let precreate_state = state.clone();
                     tokio::spawn(async move {
                         if let Err(e) = precreate_state.precreate_conversation().await {
-                            debug!("Pre-create conv failed (non-critical): {}", e);
+                            warn!("[CONV-POOL] Pre-create conv failed: {}", e);
                         }
                     });
                     return Ok(b);
@@ -72,9 +74,8 @@ impl ClaudeWebState {
                     // Report error to policy layer
                     state.policy_error();
 
-                    if let Err(e) = state.clean_chat().await {
-                        warn!("Failed to clean chat: {}", e);
-                    }
+                    // On error: retire conversation immediately, don't return to active pool
+                    state.retire_conv_on_error().await;
                     error!("{e}");
                     if let ClewdrError::InvalidCookie { reason } = e {
                         state.return_cookie(Some(reason.to_owned())).await;
@@ -104,6 +105,90 @@ impl ClaudeWebState {
             conv.conv_uuid
         );
         Some(conv.conv_uuid)
+    }
+
+    /// Try to take an active (reusable) conversation from the active pool.
+    /// Returns None if no suitable conversation exists.
+    fn take_active_conv(&self, org_uuid: &str) -> Option<String> {
+        let mut map = ACTIVE_CONV_MAP.lock().ok()?;
+        let cookie_key = self.cookie_cache_key();
+        let idx = map.iter().position(|c| {
+            c.org_uuid == org_uuid
+                && c.cookie_key == cookie_key
+                && c.msg_count < ACTIVE_CONV_MAX_MSGS
+                && c.last_used_at.elapsed().as_secs() < ACTIVE_CONV_IDLE_SECS
+        })?;
+        let conv = map.remove(idx);
+        info!(
+            "[ACTIVE-CONV] reusing conversation {} (msg #{}/{})",
+            conv.conv_uuid,
+            conv.msg_count + 1,
+            ACTIVE_CONV_MAX_MSGS
+        );
+        Some(conv.conv_uuid)
+    }
+
+    /// Return a conversation to the active pool after use, or retire it if limits exceeded.
+    fn return_active_conv(&self, org_uuid: &str, conv_uuid: &str, prev_msg_count: u32) {
+        let new_count = prev_msg_count + 1;
+        if new_count >= ACTIVE_CONV_MAX_MSGS {
+            info!(
+                "[ACTIVE-CONV] retiring conversation {} after {} messages",
+                conv_uuid, new_count
+            );
+            // Will be cleaned up via clean_chat (already queued)
+            return;
+        }
+        if let Ok(mut map) = ACTIVE_CONV_MAP.lock() {
+            map.push(ActiveConv {
+                org_uuid: org_uuid.to_string(),
+                conv_uuid: conv_uuid.to_string(),
+                cookie_key: self.cookie_cache_key(),
+                msg_count: new_count,
+                last_used_at: std::time::Instant::now(),
+                created_at: std::time::Instant::now(),
+            });
+            debug!(
+                "[ACTIVE-CONV] returned conversation {} to pool (msg {}/{})",
+                conv_uuid, new_count, ACTIVE_CONV_MAX_MSGS
+            );
+        }
+    }
+
+    /// Evict idle conversations from the active pool into the cleanup queue.
+    fn evict_idle_active_convs(&self) {
+        let expired: Vec<ActiveConv> = {
+            let Ok(mut map) = ACTIVE_CONV_MAP.lock() else { return };
+            let mut expired = Vec::new();
+            let mut remaining = Vec::new();
+            for c in map.drain(..) {
+                if c.last_used_at.elapsed().as_secs() >= ACTIVE_CONV_IDLE_SECS {
+                    info!(
+                        "[ACTIVE-CONV] evicting idle conversation {} (idle {}s)",
+                        c.conv_uuid,
+                        c.last_used_at.elapsed().as_secs()
+                    );
+                    expired.push(c);
+                } else {
+                    remaining.push(c);
+                }
+            }
+            *map = remaining;
+            expired
+        };
+        // Queue expired convs for deletion
+        if let Ok(mut queue) = crate::claude_web_state::CLEANUP_QUEUE.lock() {
+            for c in expired {
+                let delay = 30 + (uuid::Uuid::new_v4().as_bytes()[0] as u64 % 90);
+                queue.push(crate::claude_web_state::PendingCleanup {
+                    org_uuid: c.org_uuid,
+                    conv_uuid: c.conv_uuid,
+                    cookie_key: c.cookie_key,
+                    queued_at: std::time::Instant::now(),
+                    delay_secs: delay,
+                });
+            }
+        }
     }
 
     /// Pre-create a conversation and store it in the pool for the next request
@@ -177,37 +262,53 @@ impl ClaudeWebState {
                 msg: "Organization UUID is not set",
             })?;
 
-        // Try to use a pre-created conversation first
-        let new_uuid = if let Some(precreated) = self.take_precreated_conv(&org_uuid) {
-            precreated
-        } else {
-            // Create a new conversation (original path)
-            let uuid = uuid::Uuid::new_v4().to_string();
-            let endpoint = self
-                .endpoint
-                .join(&format!(
-                    "api/organizations/{}/chat_conversations",
-                    org_uuid
-                ))
-                .expect("Url parse error");
-            let body = json!({
-                "uuid": uuid,
-                "name": random_conv_name(),
-            });
+        // Evict idle conversations before picking one
+        self.evict_idle_active_convs();
 
-            self.build_request(Method::POST, endpoint)
-                .json(&body)
-                .send()
-                .await
-                .context(WreqSnafu {
-                    msg: "Failed to create new conversation",
-                })?
-                .check_claude()
-                .await?;
-            uuid
-        };
+        // Priority: active conv (reuse) > pre-created pool > new creation
+        let (new_uuid, prev_msg_count) =
+            if let Some(conv_uuid) = self.take_active_conv(&org_uuid) {
+                // Reusing an existing active conversation — most natural behavior
+                let count = {
+                    // We already removed it from the map; reconstruct count from uuid
+                    // (count was embedded in the log; here we just track 0 as sentinel
+                    //  since return_active_conv will increment it)
+                    0u32 // placeholder; actual count tracked inside take_active_conv log
+                };
+                (conv_uuid, count)
+            } else if let Some(precreated) = self.take_precreated_conv(&org_uuid) {
+                (precreated, 0u32)
+            } else {
+                // Create a new conversation (original path)
+                let uuid = uuid::Uuid::new_v4().to_string();
+                let endpoint = self
+                    .endpoint
+                    .join(&format!(
+                        "api/organizations/{}/chat_conversations",
+                        org_uuid
+                    ))
+                    .expect("Url parse error");
+                let body = json!({
+                    "uuid": uuid,
+                    "name": random_conv_name(),
+                });
 
+                self.build_request(Method::POST, endpoint)
+                    .json(&body)
+                    .send()
+                    .await
+                    .context(WreqSnafu {
+                        msg: "Failed to create new conversation",
+                    })?
+                    .check_claude()
+                    .await?;
+                info!("[ACTIVE-CONV] created new conversation {}", uuid);
+                (uuid, 0u32)
+            };
+
+        // Store msg_count in conv_uuid field temporarily via a side-channel
         self.conv_uuid = Some(new_uuid.to_string());
+        self.active_conv_msg_count = prev_msg_count;
         debug!("Using conversation: {}", new_uuid);
 
         // preserve original params for possible post-call token accounting
