@@ -266,18 +266,11 @@ impl ClaudeWebState {
         self.evict_idle_active_convs();
 
         // Priority: active conv (reuse) > pre-created pool > new creation
-        let (new_uuid, prev_msg_count) =
+        let (new_uuid, is_reusing) =
             if let Some(conv_uuid) = self.take_active_conv(&org_uuid) {
-                // Reusing an existing active conversation — most natural behavior
-                let count = {
-                    // We already removed it from the map; reconstruct count from uuid
-                    // (count was embedded in the log; here we just track 0 as sentinel
-                    //  since return_active_conv will increment it)
-                    0u32 // placeholder; actual count tracked inside take_active_conv log
-                };
-                (conv_uuid, count)
+                (conv_uuid, true)
             } else if let Some(precreated) = self.take_precreated_conv(&org_uuid) {
-                (precreated, 0u32)
+                (precreated, false)
             } else {
                 // Create a new conversation (original path)
                 let uuid = uuid::Uuid::new_v4().to_string();
@@ -303,13 +296,12 @@ impl ClaudeWebState {
                     .check_claude()
                     .await?;
                 info!("[ACTIVE-CONV] created new conversation {}", uuid);
-                (uuid, 0u32)
+                (uuid, false)
             };
 
-        // Store msg_count in conv_uuid field temporarily via a side-channel
         self.conv_uuid = Some(new_uuid.to_string());
-        self.active_conv_msg_count = prev_msg_count;
-        debug!("Using conversation: {}", new_uuid);
+        self.active_conv_msg_count = 0;
+        debug!("Using conversation: {} (reusing={})", new_uuid, is_reusing);
 
         // preserve original params for possible post-call token accounting
         self.last_params = Some(p.clone());
@@ -334,7 +326,18 @@ impl ClaudeWebState {
             .send()
             .await;
         // generate the request body
-        let mut body = self.transform_request(p).ok_or(ClewdrError::BadRequest {
+        // When reusing an active conversation, strip history — claude.ai already has context.
+        // Only send the last user message + system prompt (for tool defs etc).
+        let mut p_to_send = p.clone();
+        if is_reusing && self.session_id.is_some() {
+            // Keep only the last user message; drop all prior history
+            if let Some(last_user) = p_to_send.messages.iter().rposition(|m| m.role == crate::types::claude::Role::User) {
+                let last = p_to_send.messages.remove(last_user);
+                p_to_send.messages = vec![last];
+                info!("[ACTIVE-CONV] stripped history, sending only last user message");
+            }
+        }
+        let mut body = self.transform_request(p_to_send).ok_or(ClewdrError::BadRequest {
             msg: "Request body is empty",
         })?;
 
