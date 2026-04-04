@@ -611,7 +611,7 @@ export async function chatWithClaudePool(
     let fullText = ''
     let buffer = ''
     let responseModel = model
-    const CHAR_DELAY = 15 // ms between characters for smooth typing
+    const CHAR_DELAY = 8 // ms between characters for smooth fast typing
 
     for await (const chunk of reader) {
       buffer += decoder.decode(chunk, { stream: true })
