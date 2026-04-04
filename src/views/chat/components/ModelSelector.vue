@@ -8,6 +8,7 @@ interface ModelItem {
   label: string
   value: string
   desc?: string
+  descColor?: string // custom color for desc tag
 }
 
 interface ProviderGroup {
@@ -31,24 +32,24 @@ const MODEL_GROUPS: Category[] = [
         provider: 'OpenAI',
         color: '#10a37f',
         models: [
-          { label: 'GPT-5.4', value: 'codex:gpt-5.4', desc: '旗舰' },
-          { label: 'GPT-5.4 Mini', value: 'codex:gpt-5.4-mini', desc: '轻量' },
+          { label: 'GPT-5.4', value: 'codex:gpt-5.4', desc: '旗舰', descColor: '#10a37f' },
+          { label: 'GPT-5.4 Mini', value: 'codex:gpt-5.4-mini', desc: '轻量', descColor: '#6b7280' },
         ],
       },
       {
         provider: 'Claude',
         color: '#d97706',
         models: [
-          { label: 'Opus 4.6', value: 'claude-pool:claude-opus-4-6', desc: '旗舰' },
-          { label: 'Sonnet 4.6', value: 'claude-pool:claude-sonnet-4-6', desc: '均衡' },
+          { label: 'Opus 4.6', value: 'claude-pool:claude-opus-4-6', desc: '旗舰', descColor: '#d97706' },
+          { label: 'Sonnet 4.6', value: 'claude-pool:claude-sonnet-4-6', desc: '均衡', descColor: '#3b82f6' },
         ],
       },
       {
         provider: 'Gemini',
         color: '#4285f4',
         models: [
-          { label: '3.1 Pro', value: 'gemini-sub:gemini-3.1-pro', desc: '旗舰' },
-          { label: '3.1 Fast', value: 'gemini-sub:gemini-3.1-fast', desc: '轻量' },
+          { label: '3.1 Pro', value: 'gemini-sub:gemini-3.1-pro', desc: '旗舰', descColor: '#4285f4' },
+          { label: '3.1 Fast', value: 'gemini-sub:gemini-3.1-fast', desc: '轻量', descColor: '#6b7280' },
         ],
       },
     ],
@@ -61,24 +62,24 @@ const MODEL_GROUPS: Category[] = [
         provider: 'OpenAI',
         color: '#10a37f',
         models: [
-          { label: 'GPT-5.4', value: 'gpt-5.4', desc: '旗舰' },
-          { label: 'GPT-5.4 Mini', value: 'gpt-5.4-mini', desc: '轻量' },
+          { label: 'GPT-5.4', value: 'gpt-5.4', desc: '旗舰', descColor: '#10a37f' },
+          { label: 'GPT-5.4 Mini', value: 'gpt-5.4-mini', desc: '轻量', descColor: '#6b7280' },
         ],
       },
       {
         provider: 'Claude',
         color: '#d97706',
         models: [
-          { label: 'Opus 4.6', value: 'claude-opus-4-6', desc: '旗舰' },
-          { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6', desc: '均衡' },
+          { label: 'Opus 4.6', value: 'claude-opus-4-6', desc: '旗舰', descColor: '#d97706' },
+          { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6', desc: '均衡', descColor: '#3b82f6' },
         ],
       },
       {
         provider: 'Gemini',
         color: '#4285f4',
         models: [
-          { label: '3.1 Pro', value: 'gemini-3.1-pro', desc: '旗舰' },
-          { label: '3.1 Fast', value: 'gemini-3.1-fast', desc: '轻量' },
+          { label: '3.1 Pro', value: 'gemini-3.1-pro', desc: '旗舰', descColor: '#4285f4' },
+          { label: '3.1 Fast', value: 'gemini-3.1-fast', desc: '轻量', descColor: '#6b7280' },
         ],
       },
     ],
@@ -97,12 +98,10 @@ const showDropdown = ref(false)
 const activeTab = ref('sub')
 const showApiWarning = ref(false)
 
-// Check if user has API config
 const hasApiConfig = computed(() => {
   return !!(settingStore.apiBaseUrl?.trim() || settingStore.apiKey?.trim())
 })
 
-// Auto-detect which tab the current model belongs to
 const currentTab = computed(() => {
   for (const cat of MODEL_GROUPS) {
     for (const g of cat.groups) {
@@ -112,7 +111,6 @@ const currentTab = computed(() => {
   return 'sub'
 })
 
-// Set active tab to match current model on open
 function openDropdown() {
   activeTab.value = currentTab.value
   showApiWarning.value = false
@@ -120,11 +118,7 @@ function openDropdown() {
 }
 
 function switchTab(key: string) {
-  if (key === 'api' && !hasApiConfig.value) {
-    showApiWarning.value = true
-  } else {
-    showApiWarning.value = false
-  }
+  showApiWarning.value = key === 'api' && !hasApiConfig.value
   activeTab.value = key
 }
 
@@ -160,10 +154,7 @@ function isSelected(value: string) {
       class="flex items-center gap-1.5 hover:bg-[#f4f4f4] rounded-lg px-2.5 py-1 transition-colors"
       @click="openDropdown"
     >
-      <span
-        class="w-2 h-2 rounded-full flex-shrink-0"
-        :style="{ backgroundColor: selectedProvider.color }"
-      />
+      <span class="w-2 h-2 rounded-full flex-shrink-0" :style="{ backgroundColor: selectedProvider.color }" />
       <span class="text-[14px] font-medium text-[#0d0d0d]">{{ selectedLabel }}</span>
       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#999" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" class="transition-transform" :class="showDropdown ? 'rotate-180' : ''">
         <polyline points="6 9 12 15 18 9" />
@@ -173,64 +164,71 @@ function isSelected(value: string) {
     <!-- Dropdown panel -->
     <div
       v-show="showDropdown"
-      class="absolute left-0 top-full z-50 mt-1.5 w-[280px] bg-white rounded-xl shadow-[0_4px_24px_rgba(0,0,0,0.12)] border border-[#e5e5e5] overflow-hidden"
+      class="absolute left-0 top-full z-50 mt-1.5 w-[300px] bg-white rounded-2xl shadow-[0_8px_32px_rgba(0,0,0,0.12)] border border-[#ebebeb] overflow-hidden"
     >
       <!-- Tab bar -->
       <div class="flex border-b border-[#f0f0f0] bg-[#fafafa]">
         <button
           v-for="cat in MODEL_GROUPS"
           :key="cat.key"
-          class="flex-1 py-2 text-[12px] font-medium transition-colors relative"
-          :class="activeTab === cat.key ? 'text-[#0d0d0d]' : 'text-[#999] hover:text-[#666]'"
+          class="flex-1 py-2.5 text-[13px] font-medium transition-colors relative"
+          :class="activeTab === cat.key ? 'text-[#0d0d0d]' : 'text-[#bbb] hover:text-[#888]'"
           @click="switchTab(cat.key)"
         >
           {{ cat.label }}
           <div
             v-if="activeTab === cat.key"
-            class="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-[2px] bg-[#0d0d0d] rounded-full"
+            class="absolute bottom-0 left-1/2 -translate-x-1/2 w-6 h-[2px] bg-[#0d0d0d] rounded-full"
           />
         </button>
       </div>
 
       <!-- API config warning -->
-      <div v-if="showApiWarning && activeTab === 'api'" class="mx-2 mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
-        <div class="text-[11px] text-amber-700 font-medium">⚠️ 未配置 API</div>
-        <div class="text-[10px] text-amber-600 mt-0.5">请先在设置中填写 Base URL 和 API Key</div>
+      <div v-if="showApiWarning && activeTab === 'api'" class="mx-3 mt-2.5 px-3 py-2 rounded-xl bg-amber-50 border border-amber-200">
+        <div class="text-[12px] text-amber-700 font-semibold">⚠️ 未配置 API</div>
+        <div class="text-[11px] text-amber-600 mt-0.5">请先在设置中填写 Base URL 和 API Key</div>
       </div>
 
       <!-- Model list -->
-      <div class="p-1.5">
+      <div class="p-2">
         <template v-for="cat in MODEL_GROUPS" :key="cat.key">
-          <div v-show="activeTab === cat.key">
-            <div v-for="(group, gi) in cat.groups" :key="group.provider" :class="gi > 0 ? 'mt-1' : ''">
+          <div v-show="activeTab === cat.key" class="space-y-0.5">
+            <div v-for="(group, gi) in cat.groups" :key="group.provider" :class="gi > 0 ? 'mt-2' : 'mt-1'">
               <!-- Provider label -->
-              <div class="flex items-center gap-1.5 px-2 pt-1.5 pb-1">
-                <span class="w-1.5 h-1.5 rounded-full" :style="{ backgroundColor: group.color }" />
-                <span class="text-[11px] font-medium text-[#aaa]">{{ group.provider }}</span>
+              <div class="flex items-center gap-1.5 px-2 pb-1.5">
+                <span class="w-[6px] h-[6px] rounded-full flex-shrink-0" :style="{ backgroundColor: group.color }" />
+                <span class="text-[11px] font-semibold tracking-wide uppercase" :style="{ color: group.color }">{{ group.provider }}</span>
               </div>
-              <!-- Model buttons in row -->
-              <div class="flex gap-1 px-1.5">
+              <!-- Model buttons -->
+              <div class="grid grid-cols-2 gap-1.5 px-1">
                 <button
                   v-for="model in group.models"
                   :key="model.value"
-                  class="flex-1 py-1.5 px-2 rounded-lg text-left transition-all"
+                  class="relative flex flex-col items-start px-3 py-2.5 rounded-xl text-left transition-all"
                   :class="isSelected(model.value)
-                    ? 'bg-[#0d0d0d] text-white'
-                    : 'bg-[#f5f5f5] hover:bg-[#ebebeb] text-[#333]'"
+                    ? 'bg-[#0d0d0d] text-white shadow-sm'
+                    : 'bg-[#f5f5f5] hover:bg-[#ececec] text-[#1a1a1a]'"
                   @click="selectModel(model.value)"
                 >
-                  <div class="text-[12px] font-medium leading-tight">{{ model.label }}</div>
-                  <div
+                  <!-- Model name -->
+                  <span class="text-[13px] font-semibold leading-snug tracking-tight">{{ model.label }}</span>
+                  <!-- Desc tag -->
+                  <span
                     v-if="model.desc"
-                    class="text-[10px] mt-0.5 leading-tight"
-                    :class="isSelected(model.value) ? 'text-white/60' : 'text-[#999]'"
-                  >{{ model.desc }}</div>
+                    class="mt-1 text-[11px] font-medium leading-none px-1.5 py-0.5 rounded-md"
+                    :style="isSelected(model.value)
+                      ? 'background:rgba(255,255,255,0.15); color:rgba(255,255,255,0.85)'
+                      : `background:${model.descColor}18; color:${model.descColor}`"
+                  >{{ model.desc }}</span>
                 </button>
               </div>
             </div>
           </div>
         </template>
       </div>
+
+      <!-- Bottom padding -->
+      <div class="h-1.5" />
     </div>
 
     <!-- Click outside to close -->
