@@ -4,7 +4,7 @@ use base64::{Engine, prelude::BASE64_STANDARD};
 use futures::{StreamExt, stream};
 use itertools::Itertools;
 use serde_json::Value;
-use tracing::warn;
+use tracing::{info, warn};
 use wreq::multipart::{Form, Part};
 
 use crate::{
@@ -17,6 +17,11 @@ use crate::{
     utils::{TIME_ZONE, print_out_text},
 };
 
+/// Threshold in bytes: messages shorter than this go directly in the prompt field
+/// (no attachment). This mimics normal user behavior — only very long messages
+/// get auto-converted to paste.txt attachments by the real claude.ai frontend.
+const ATTACHMENT_THRESHOLD: usize = 4000;
+
 impl ClaudeWebState {
     pub fn transform_request(&self, mut value: CreateMessageParams) -> Option<WebRequestBody> {
         let system = value.system.take();
@@ -28,9 +33,28 @@ impl ClaudeWebState {
         if CLEWDR_CONFIG.load().web_search {
             tools.push(Tool::web_search());
         }
+
+        // Smart attachment decision: short messages go in prompt, long ones in attachment
+        // Real claude.ai only creates paste.txt for very long pasted content
+        let (attachments, prompt) = if merged.paste.len() > ATTACHMENT_THRESHOLD {
+            // Long content → use attachment (like real paste behavior)
+            info!("[TRANSFORM] Long content ({}B), using attachment", merged.paste.len());
+            (vec![Attachment::new(merged.paste)], merged.prompt)
+        } else {
+            // Short content → put everything in prompt field (like normal typing)
+            // Combine system prompt and message content
+            let full_prompt = if merged.prompt.is_empty() {
+                merged.paste
+            } else {
+                format!("{}\n\n{}", merged.prompt, merged.paste)
+            };
+            info!("[TRANSFORM] Short content ({}B), using prompt only", full_prompt.len());
+            (vec![], full_prompt)
+        };
+
         Some(WebRequestBody {
             max_tokens_to_sample: value.max_tokens,
-            attachments: vec![Attachment::new(merged.paste)],
+            attachments,
             files: vec![],
             model: if self.is_pro() {
                 Some(value.model)
@@ -42,7 +66,7 @@ impl ClaudeWebState {
             } else {
                 "raw".to_string()
             },
-            prompt: merged.prompt,
+            prompt,
             timezone: TIME_ZONE.to_string(),
             images: merged.images,
             tools,
