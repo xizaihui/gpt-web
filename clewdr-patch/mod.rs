@@ -46,8 +46,45 @@ pub struct PreCreatedConv {
     pub created_at: std::time::Instant,
 }
 
+// ── Delayed cleanup queue: delete conversations after a random delay ──
+#[derive(Clone, Debug)]
+pub struct PendingCleanup {
+    pub org_uuid: String,
+    pub conv_uuid: String,
+    pub cookie_key: String,
+    pub queued_at: std::time::Instant,
+    pub delay_secs: u64, // random delay before deletion
+}
+
+pub static CLEANUP_QUEUE: LazyLock<std::sync::Mutex<Vec<PendingCleanup>>> =
+    LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
 pub static CONV_POOL: LazyLock<std::sync::Mutex<Vec<PreCreatedConv>>> =
     LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
+
+// ── Policy Layer: rate limiting + circuit breaker per cookie ──
+#[derive(Clone, Debug)]
+pub struct CookiePolicy {
+    /// Timestamps of recent requests (for rate limiting)
+    pub request_times: Vec<std::time::Instant>,
+    /// Consecutive error count (for circuit breaker)
+    pub consecutive_errors: u32,
+    /// If set, cookie is frozen until this time
+    pub frozen_until: Option<std::time::Instant>,
+}
+
+impl Default for CookiePolicy {
+    fn default() -> Self {
+        Self {
+            request_times: Vec::new(),
+            consecutive_errors: 0,
+            frozen_until: None,
+        }
+    }
+}
+
+pub static COOKIE_POLICIES: LazyLock<std::sync::Mutex<std::collections::HashMap<String, CookiePolicy>>> =
+    LazyLock::new(|| std::sync::Mutex::new(std::collections::HashMap::new()));
 
 pub mod bootstrap;
 pub mod chat;
@@ -114,13 +151,20 @@ impl ClaudeWebState {
             .unwrap_or_default()
     }
 
-    /// Build a request with the current cookie and proxy settings
+    /// Build a request with the current cookie, proxy settings, and browser-like headers
     pub fn build_request(&self, method: Method, url: impl ToString) -> RequestBuilder {
-        // let r = SUPER_CLIENT.cloned();
         let mut req = self
             .client
             .request(method, url.to_string())
-            .header(ORIGIN, CLAUDE_ENDPOINT);
+            .header(ORIGIN, CLAUDE_ENDPOINT)
+            // Browser-like headers to reduce fingerprinting
+            .header("Accept-Language", "en-US,en;q=0.9")
+            .header("Sec-CH-UA", "\"Chromium\";v=\"136\", \"Google Chrome\";v=\"136\", \"Not.A/Brand\";v=\"8\"")
+            .header("Sec-CH-UA-Mobile", "?0")
+            .header("Sec-CH-UA-Platform", "\"Windows\"")
+            .header("Sec-Fetch-Dest", "empty")
+            .header("Sec-Fetch-Mode", "cors")
+            .header("Sec-Fetch-Site", "same-origin");
         if !self.cookie_header_value.as_bytes().is_empty() {
             req = req.header(COOKIE, self.cookie_header_value.clone());
         }
@@ -218,8 +262,95 @@ impl ClaudeWebState {
         }
     }
 
-    /// Deletes or renames the current chat conversation based on configuration
-    /// If preserve_chats is true, the chat is renamed rather than deleted
+    // ── Policy Layer methods ──
+
+    /// Check if this cookie is allowed to make a request (rate limit + circuit breaker)
+    /// Returns Ok(()) if allowed, or Err with a message if blocked.
+    pub fn policy_check(&self) -> Result<(), ClewdrError> {
+        let cookie_key = self.cookie_cache_key();
+        if cookie_key.is_empty() {
+            return Ok(());
+        }
+
+        let mut policies = COOKIE_POLICIES.lock().map_err(|_| ClewdrError::UnexpectedNone {
+            msg: "Policy lock poisoned",
+        })?;
+        let policy = policies.entry(cookie_key).or_default();
+
+        // Circuit breaker: check if frozen
+        if let Some(frozen_until) = policy.frozen_until {
+            if std::time::Instant::now() < frozen_until {
+                let remaining = frozen_until.duration_since(std::time::Instant::now()).as_secs();
+                warn!("[POLICY] Cookie frozen, {}s remaining", remaining);
+                return Err(ClewdrError::BadRequest {
+                    msg: "Account temporarily frozen due to consecutive errors",
+                });
+            } else {
+                // Unfreeze
+                policy.frozen_until = None;
+                policy.consecutive_errors = 0;
+                info!("[POLICY] Cookie unfrozen, resuming");
+            }
+        }
+
+        // Rate limit: max 5 requests per minute per cookie
+        let now = std::time::Instant::now();
+        let one_min_ago = now - Duration::from_secs(60);
+        policy.request_times.retain(|t| *t > one_min_ago);
+
+        if policy.request_times.len() >= 5 {
+            let oldest = policy.request_times[0];
+            let wait = Duration::from_secs(60) - now.duration_since(oldest);
+            warn!("[POLICY] Rate limit: {} requests in last minute, wait {}s",
+                policy.request_times.len(), wait.as_secs());
+            return Err(ClewdrError::BadRequest {
+                msg: "Rate limited: too many requests per minute for this account",
+            });
+        }
+
+        // Record this request
+        policy.request_times.push(now);
+        Ok(())
+    }
+
+    /// Report a successful request — reset consecutive error count
+    pub fn policy_success(&self) {
+        let cookie_key = self.cookie_cache_key();
+        if cookie_key.is_empty() {
+            return;
+        }
+        if let Ok(mut policies) = COOKIE_POLICIES.lock() {
+            if let Some(policy) = policies.get_mut(&cookie_key) {
+                policy.consecutive_errors = 0;
+            }
+        }
+    }
+
+    /// Report a failed request — increment error count, potentially freeze
+    pub fn policy_error(&self) {
+        let cookie_key = self.cookie_cache_key();
+        if cookie_key.is_empty() {
+            return;
+        }
+        if let Ok(mut policies) = COOKIE_POLICIES.lock() {
+            let policy = policies.entry(cookie_key).or_default();
+            policy.consecutive_errors += 1;
+
+            // Freeze after 3 consecutive errors
+            if policy.consecutive_errors >= 3 {
+                let freeze_duration = Duration::from_secs(30 * 60); // 30 minutes
+                policy.frozen_until = Some(std::time::Instant::now() + freeze_duration);
+                warn!(
+                    "[POLICY] Cookie frozen for 30min after {} consecutive errors",
+                    policy.consecutive_errors
+                );
+            }
+        }
+    }
+
+    /// Queue conversation for delayed deletion instead of immediate delete.
+    /// This looks more natural — real users don't delete chats within milliseconds.
+    /// Conversations are deleted 30-120 seconds later by the cleanup task.
     pub async fn clean_chat(&self) -> Result<(), ClewdrError> {
         if CLEWDR_CONFIG.load().preserve_chats {
             return Ok(());
@@ -230,21 +361,55 @@ impl ClaudeWebState {
         let Some(ref conv_uuid) = self.conv_uuid else {
             return Ok(());
         };
-        let endpoint = self
-            .endpoint
-            .join(&format!(
-                "api/organizations/{}/chat_conversations/{}",
-                org_uuid, conv_uuid
-            ))
-            .expect("Url parse error");
-        debug!("Deleting chat: {}", conv_uuid);
-        let _ = self
-            .build_request(Method::DELETE, endpoint)
-            .send()
-            .await
-            .context(WreqSnafu {
-                msg: "Failed to delete chat conversation",
+
+        // Queue for delayed deletion
+        let delay = 30 + (uuid::Uuid::new_v4().as_bytes()[0] as u64 % 90); // 30-120 seconds
+        if let Ok(mut queue) = CLEANUP_QUEUE.lock() {
+            queue.push(PendingCleanup {
+                org_uuid: org_uuid.clone(),
+                conv_uuid: conv_uuid.clone(),
+                cookie_key: self.cookie_cache_key(),
+                queued_at: std::time::Instant::now(),
+                delay_secs: delay,
             });
+            debug!("Queued chat {} for deletion in {}s", conv_uuid, delay);
+        }
+
+        // Process any conversations that are past their delay
+        self.process_cleanup_queue().await;
+
         Ok(())
+    }
+
+    /// Process the cleanup queue — delete conversations that have waited long enough
+    async fn process_cleanup_queue(&self) {
+        let ready: Vec<PendingCleanup> = {
+            let Ok(mut queue) = CLEANUP_QUEUE.lock() else {
+                return;
+            };
+            let mut ready = Vec::new();
+            let mut remaining = Vec::new();
+            for item in queue.drain(..) {
+                if item.queued_at.elapsed().as_secs() >= item.delay_secs {
+                    ready.push(item);
+                } else {
+                    remaining.push(item);
+                }
+            }
+            *queue = remaining;
+            ready
+        };
+
+        for item in ready {
+            let endpoint = self
+                .endpoint
+                .join(&format!(
+                    "api/organizations/{}/chat_conversations/{}",
+                    item.org_uuid, item.conv_uuid
+                ))
+                .expect("Url parse error");
+            debug!("Delayed-deleting chat: {}", item.conv_uuid);
+            let _ = self.build_request(Method::DELETE, endpoint).send().await;
+        }
     }
 }

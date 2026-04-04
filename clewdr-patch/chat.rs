@@ -14,6 +14,12 @@ use crate::{
     utils::print_out_json,
 };
 
+/// Generate a natural-looking conversation name like a real user would
+fn random_conv_name() -> String {
+    // No name at all — most users just let claude name it automatically
+    String::new()
+}
+
 impl ClaudeWebState {
     /// Attempts to send a chat message to Claude API with retry mechanism
     pub async fn try_chat(
@@ -28,6 +34,17 @@ impl ClaudeWebState {
             let p = p.to_owned();
 
             let cookie = state.request_cookie().await?;
+
+            // Policy check: rate limit + circuit breaker
+            state.policy_check()?;
+
+            // Random delay between requests (3-8 seconds) to mimic human behavior
+            // Skip delay on first request after warm-up
+            if i == 0 {
+                let delay_ms = 500 + (uuid::Uuid::new_v4().as_bytes()[0] as u64 % 1500); // 0.5-2s
+                tokio::time::sleep(tokio::time::Duration::from_millis(delay_ms)).await;
+            }
+
             // bootstrap uses cache (fast path) or full bootstrap (slow path)
             let web_res = async { state.bootstrap().await.and(state.send_chat(p).await) };
             let transform_res = web_res
@@ -36,7 +53,10 @@ impl ClaudeWebState {
 
             match transform_res.await {
                 Ok(b) => {
-                    // Clean chat in background, don't block response
+                    // Report success to policy layer
+                    state.policy_success();
+
+                    // Clean chat in background (delayed deletion)
                     let clean_state = state.clone();
                     tokio::spawn(async move {
                         if let Err(e) = clean_state.clean_chat().await {
@@ -53,6 +73,9 @@ impl ClaudeWebState {
                     return Ok(b);
                 }
                 Err(e) => {
+                    // Report error to policy layer
+                    state.policy_error();
+
                     if let Err(e) = state.clean_chat().await {
                         warn!("Failed to clean chat: {}", e);
                     }
@@ -121,7 +144,7 @@ impl ClaudeWebState {
             .expect("Url parse error");
         let body = json!({
             "uuid": new_uuid,
-            "name": format!("ClewdR-{}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")),
+            "name": random_conv_name(),
         });
 
         self.build_request(Method::POST, endpoint)
@@ -173,7 +196,7 @@ impl ClaudeWebState {
                 .expect("Url parse error");
             let body = json!({
                 "uuid": uuid,
-                "name": format!("ClewdR-{}", chrono::Utc::now().format("%Y-%m-%d %H:%M:%S")),
+                "name": random_conv_name(),
             });
 
             self.build_request(Method::POST, endpoint)
@@ -226,7 +249,7 @@ impl ClaudeWebState {
         body.files = files;
 
         // send the request
-        print_out_json(&body, "claude_web_clewdr_req.json");
+        print_out_json(&body, "web_req.json");
         let endpoint = self
             .endpoint
             .join(&format!(
