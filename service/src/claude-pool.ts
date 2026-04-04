@@ -604,11 +604,14 @@ export async function chatWithClaudePool(
     }
 
     // Parse SSE stream (OpenAI format from ClewdR)
+    // ClewdR sends chunks in large blocks; we split into individual characters
+    // for smooth typing animation on the frontend
     const reader = response.body as any
     const decoder = new TextDecoder()
     let fullText = ''
     let buffer = ''
     let responseModel = model
+    const CHAR_DELAY = 15 // ms between characters for smooth typing
 
     for await (const chunk of reader) {
       buffer += decoder.decode(chunk, { stream: true })
@@ -625,14 +628,23 @@ export async function chatWithClaudePool(
           const parsed = JSON.parse(data)
           const delta = parsed.choices?.[0]?.delta
           if (delta?.content) {
-            fullText += delta.content
-            onProgress?.({
-              id: parsed.id || 'msg',
-              text: fullText,
-              role: 'assistant',
-              model: responseModel,
-              detail: parsed,
-            })
+            // Split chunk into individual characters and emit with small delays
+            const chars = [...delta.content]
+            for (let i = 0; i < chars.length; i++) {
+              fullText += chars[i]
+              onProgress?.({
+                id: parsed.id || 'msg',
+                text: fullText,
+                role: 'assistant',
+                model: responseModel,
+                detail: parsed,
+              })
+              // Small delay between chars for smooth streaming feel
+              // Skip delay for last char or whitespace-only
+              if (i < chars.length - 1 && chars[i].trim()) {
+                await new Promise(r => setTimeout(r, CHAR_DELAY))
+              }
+            }
           }
           if (parsed.model) responseModel = parsed.model
         } catch { /* skip */ }
