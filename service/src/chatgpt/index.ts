@@ -16,15 +16,19 @@ const API_KEY = process.env.OPENAI_API_KEY || ''
 const DEFAULT_MODEL = process.env.OPENAI_API_MODEL || 'gpt-4o'
 
 const AVAILABLE_MODELS = [
-  { id: 'gpt-4o', name: 'GPT-4o', provider: 'OpenAI' },
-  { id: 'gpt-4o-mini', name: 'GPT-4o Mini', provider: 'OpenAI' },
-  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'Anthropic' },
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic' },
-  { id: 'gemini-2.5-pro', name: 'Gemini 2.5 Pro', provider: 'Google' },
-  { id: 'gemini-2.5-flash', name: 'Gemini 2.5 Flash', provider: 'Google' },
-  { id: 'deepseek-chat', name: 'DeepSeek V3', provider: 'DeepSeek' },
-  { id: 'deepseek-reasoner', name: 'DeepSeek R1', provider: 'DeepSeek' },
+  // Subscription models
   ...CODEX_MODELS.map(m => ({ id: m.id, name: m.name, provider: m.provider })),
+  { id: 'claude-pool:claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (订阅)', provider: 'Claude Pro' },
+  { id: 'claude-pool:claude-opus-4-6', name: 'Claude Opus 4.6 (订阅)', provider: 'Claude Pro' },
+  { id: 'gemini-sub:gemini-3.1-pro', name: 'Gemini 3.1 Pro (订阅)', provider: 'Gemini Advanced' },
+  { id: 'gemini-sub:gemini-3.1-fast', name: 'Gemini 3.1 Fast (订阅)', provider: 'Gemini Advanced' },
+  // API models
+  { id: 'gpt-5.4', name: 'GPT-5.4', provider: 'OpenAI' },
+  { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini', provider: 'OpenAI' },
+  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', provider: 'Anthropic' },
+  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', provider: 'Anthropic' },
+  { id: 'gemini-3.1-pro', name: 'Gemini 3.1 Pro', provider: 'Google' },
+  { id: 'gemini-3.1-fast', name: 'Gemini 3.1 Fast', provider: 'Google' },
 ]
 
 interface ChatMessage {

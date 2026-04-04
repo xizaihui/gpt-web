@@ -611,6 +611,7 @@ export async function chatWithClaudePool(
     let fullText = ''
     let buffer = ''
     let responseModel = model
+    let finalUsage: any = null
     const CHAR_DELAY = 8 // ms between characters for smooth fast typing
 
     for await (const chunk of reader) {
@@ -646,9 +647,39 @@ export async function chatWithClaudePool(
               }
             }
           }
+          // Capture usage from streaming chunks (ClewdR may include it)
+          if (parsed.usage) {
+            finalUsage = parsed.usage
+          }
           if (parsed.model) responseModel = parsed.model
         } catch { /* skip */ }
       }
+    }
+
+    // Estimate token usage if ClewdR didn't provide it
+    if (!finalUsage) {
+      // Rough estimate: 1 token ≈ 1.5 Chinese chars or 4 English chars
+      const inputText = messages.map(m => typeof m.content === 'string' ? m.content : '').join('')
+      const estInput = Math.ceil(inputText.length / 2)
+      const estOutput = Math.ceil(fullText.length / 2)
+      finalUsage = {
+        prompt_tokens: estInput,
+        completion_tokens: estOutput,
+        total_tokens: estInput + estOutput,
+      }
+    }
+
+    // Emit final usage event
+    if (finalUsage) {
+      finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + (finalUsage.completion_tokens || 0)
+      console.log(`[ClaudePool/ClewdR] usage:`, JSON.stringify(finalUsage))
+      onProgress?.({
+        id: 'usage',
+        text: fullText,
+        role: 'assistant',
+        model: responseModel,
+        usage: finalUsage,
+      })
     }
 
     console.log(`[ClaudePool/ClewdR] done | model: ${responseModel} | chars: ${fullText.length}`)
@@ -661,11 +692,8 @@ export async function chatWithClaudePool(
 
 // ── Available Claude models ──
 export const CLAUDE_POOL_MODELS = [
-  { id: 'claude-pool:claude-sonnet-4-20250514', name: 'Claude Sonnet 4 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-sonnet-4-20250514' },
   { id: 'claude-pool:claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-sonnet-4-6' },
-  { id: 'claude-pool:claude-opus-4-20250918', name: 'Claude Opus 4 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-opus-4-20250918' },
   { id: 'claude-pool:claude-opus-4-6', name: 'Claude Opus 4.6 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-opus-4-6' },
-  { id: 'claude-pool:claude-haiku-4-5', name: 'Claude Haiku 4.5 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-haiku-4-5' },
 ]
 
 // All models to probe
