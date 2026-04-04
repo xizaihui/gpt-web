@@ -1,5 +1,8 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
+import { useSettingStore } from '@/store'
+
+const settingStore = useSettingStore()
 
 interface ModelItem {
   label: string
@@ -36,8 +39,8 @@ const MODEL_GROUPS: Category[] = [
         provider: 'Claude',
         color: '#d97706',
         models: [
-          { label: 'Sonnet 4.6', value: 'claude-pool:claude-sonnet-4-6', desc: '均衡' },
           { label: 'Opus 4.6', value: 'claude-pool:claude-opus-4-6', desc: '旗舰' },
+          { label: 'Sonnet 4.6', value: 'claude-pool:claude-sonnet-4-6', desc: '均衡' },
         ],
       },
       {
@@ -66,8 +69,8 @@ const MODEL_GROUPS: Category[] = [
         provider: 'Claude',
         color: '#d97706',
         models: [
-          { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6', desc: '均衡' },
           { label: 'Opus 4.6', value: 'claude-opus-4-6', desc: '旗舰' },
+          { label: 'Sonnet 4.6', value: 'claude-sonnet-4-6', desc: '均衡' },
         ],
       },
       {
@@ -92,6 +95,12 @@ const emit = defineEmits<Emits>()
 
 const showDropdown = ref(false)
 const activeTab = ref('sub')
+const showApiWarning = ref(false)
+
+// Check if user has API config
+const hasApiConfig = computed(() => {
+  return !!(settingStore.apiBaseUrl?.trim() || settingStore.apiKey?.trim())
+})
 
 // Auto-detect which tab the current model belongs to
 const currentTab = computed(() => {
@@ -106,7 +115,17 @@ const currentTab = computed(() => {
 // Set active tab to match current model on open
 function openDropdown() {
   activeTab.value = currentTab.value
+  showApiWarning.value = false
   showDropdown.value = !showDropdown.value
+}
+
+function switchTab(key: string) {
+  if (key === 'api' && !hasApiConfig.value) {
+    showApiWarning.value = true
+  } else {
+    showApiWarning.value = false
+  }
+  activeTab.value = key
 }
 
 const selectedLabel = computed(() => {
@@ -163,7 +182,7 @@ function isSelected(value: string) {
           :key="cat.key"
           class="flex-1 py-2 text-[12px] font-medium transition-colors relative"
           :class="activeTab === cat.key ? 'text-[#0d0d0d]' : 'text-[#999] hover:text-[#666]'"
-          @click="activeTab = cat.key"
+          @click="switchTab(cat.key)"
         >
           {{ cat.label }}
           <div
@@ -171,6 +190,12 @@ function isSelected(value: string) {
             class="absolute bottom-0 left-1/2 -translate-x-1/2 w-8 h-[2px] bg-[#0d0d0d] rounded-full"
           />
         </button>
+      </div>
+
+      <!-- API config warning -->
+      <div v-if="showApiWarning && activeTab === 'api'" class="mx-2 mt-2 px-3 py-2 rounded-lg bg-amber-50 border border-amber-200">
+        <div class="text-[11px] text-amber-700 font-medium">⚠️ 未配置 API</div>
+        <div class="text-[10px] text-amber-600 mt-0.5">请先在设置中填写 Base URL 和 API Key</div>
       </div>
 
       <!-- Model list -->
