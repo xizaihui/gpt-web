@@ -282,6 +282,9 @@ impl ClaudeWebState {
 
     /// Sends a message to the Claude API
     async fn send_chat(&mut self, p: CreateMessageParams) -> Result<Response, ClewdrError> {
+        use std::time::Instant;
+        let t0 = Instant::now();
+
         let org_uuid = self
             .org_uuid
             .to_owned()
@@ -326,6 +329,8 @@ impl ClaudeWebState {
                 (uuid, false, 0u32)
             };
 
+        let t_conv = t0.elapsed();
+
         self.conv_uuid = Some(new_uuid.to_string());
         self.active_conv_msg_count = 0;
         self.is_reusing_conv = is_reusing;
@@ -334,26 +339,27 @@ impl ClaudeWebState {
 
         // preserve original params for possible post-call token accounting
         self.last_params = Some(p.clone());
-        let mut body = json!({});
-        // enable thinking mode
-        body["settings"]["paprika_mode"] = if p.thinking.is_some() && self.is_pro() {
-            "extended".into()
-        } else {
-            json!(null)
-        };
 
-        let endpoint = self
-            .endpoint
-            .join(&format!(
-                "api/organizations/{}/chat_conversations/{}",
-                org_uuid, new_uuid
-            ))
-            .expect("Url parse error");
-        let _ = self
-            .build_request(Method::PUT, endpoint)
-            .json(&body)
-            .send()
-            .await;
+        // Only set paprika_mode if thinking is enabled — skip the PUT request otherwise
+        let has_thinking = p.thinking.is_some() && self.is_pro();
+        if has_thinking {
+            let mut body = json!({});
+            body["settings"]["paprika_mode"] = "extended".into();
+            let endpoint = self
+                .endpoint
+                .join(&format!(
+                    "api/organizations/{}/chat_conversations/{}",
+                    org_uuid, new_uuid
+                ))
+                .expect("Url parse error");
+            let _ = self
+                .build_request(Method::PUT, endpoint)
+                .json(&body)
+                .send()
+                .await;
+        }
+
+        let t_settings = t0.elapsed();
         // generate the request body
         // When reusing an active conversation, strip history — claude.ai already has context.
         // Only send the last user message + system prompt (for tool defs etc).
@@ -369,6 +375,8 @@ impl ClaudeWebState {
         let mut body = self.transform_request(p_to_send).ok_or(ClewdrError::BadRequest {
             msg: "Request body is empty",
         })?;
+
+        let t_transform = t0.elapsed();
 
         // check images
         let images = body.images.drain(..).collect::<Vec<_>>();
@@ -387,7 +395,13 @@ impl ClaudeWebState {
             ))
             .expect("Url parse error");
 
-        self.build_request(Method::POST, endpoint)
+        let t_pre_send = t0.elapsed();
+        info!(
+            "[TIMING] conv={:.0?} settings={:.0?} transform={:.0?} pre_send={:.0?}",
+            t_conv, t_settings, t_transform, t_pre_send
+        );
+
+        let result = self.build_request(Method::POST, endpoint)
             .json(&body)
             .header(ACCEPT, "text/event-stream")
             .send()
@@ -396,6 +410,14 @@ impl ClaudeWebState {
                 msg: "Failed to send chat request",
             })?
             .check_claude()
-            .await
+            .await;
+
+        let t_response = t0.elapsed();
+        info!(
+            "[TIMING] response={:.0?} (inference={:.0?})",
+            t_response, t_response - t_pre_send
+        );
+
+        result
     }
 }
