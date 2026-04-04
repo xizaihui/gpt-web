@@ -13,6 +13,7 @@ use axum::{
 use http::HeaderMap;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
+use tracing::debug;
 
 use crate::{
     config::{CLAUDE_CODE_BILLING_SALT, CLAUDE_CODE_VERSION, CLEWDR_CONFIG},
@@ -291,14 +292,94 @@ where
     type Rejection = ClewdrError;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, Self::Rejection> {
-        // Extract session ID before consuming the request
-        let session_id = req
+        // Extract session ID from explicit header
+        let explicit_session_id = req
             .headers()
             .get("x-session-id")
             .and_then(|v| v.to_str().ok())
             .map(|s| s.to_string());
 
+        // Extract API key for auto session inference (from Authorization or x-api-key)
+        let api_key_hint = req
+            .headers()
+            .get("authorization")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.trim_start_matches("Bearer ").trim_start_matches("bearer "))
+            .or_else(|| {
+                req.headers()
+                    .get("x-api-key")
+                    .and_then(|v| v.to_str().ok())
+            })
+            .unwrap_or("")
+            .to_string();
+
+        // Extract client identity hints for auto session inference
+        // Priority: X-Forwarded-For > X-Real-IP > X-Original-Forwarded-For
+        // These help distinguish different end-users behind the same API key (e.g. NewAPI)
+        let client_ip = req
+            .headers()
+            .get("x-forwarded-for")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
+            .or_else(|| {
+                req.headers()
+                    .get("x-real-ip")
+                    .and_then(|v| v.to_str().ok())
+                    .map(String::from)
+            })
+            .or_else(|| {
+                req.headers()
+                    .get("x-original-forwarded-for")
+                    .and_then(|v| v.to_str().ok())
+                    .map(|s| s.split(',').next().unwrap_or("").trim().to_string())
+                })
+            .unwrap_or_default();
+
         let NormalizeRequest(mut body, format) = NormalizeRequest::from_request(req, &()).await?;
+
+        // Resolve session_id: explicit header > auto-infer from request content
+        let session_id = explicit_session_id.or_else(|| {
+            // Auto-infer: hash(api_key_suffix + client_ip + system_prompt + first_user_message)
+            // This ensures:
+            // - Different API keys (different downstream services) → different sessions
+            // - Same key + different client IPs (different end-users via NewAPI) → different sessions
+            // - Same key + same IP + different system prompts → different sessions
+            // - Same key + same IP + same system + different first message → different conversations
+            // - Same key + same IP + same system + same first message → same conversation (reuse)
+            let mut hasher = DefaultHasher::new();
+
+            // API key suffix (last 16 chars) as namespace
+            let key_suffix = if api_key_hint.len() > 16 {
+                &api_key_hint[api_key_hint.len() - 16..]
+            } else {
+                &api_key_hint
+            };
+            key_suffix.hash(&mut hasher);
+
+            // Client IP — distinguishes different end-users behind same API key
+            if !client_ip.is_empty() {
+                client_ip.hash(&mut hasher);
+            }
+
+            // System prompt — different system prompts = different sessions
+            if let Some(ref sys) = body.system {
+                sys.hash(&mut hasher);
+            }
+
+            // First user message — identifies the conversation origin
+            if let Some(first_msg) = body.messages.first() {
+                // Use the content of the first message
+                format!("{:?}", first_msg).hash(&mut hasher);
+            }
+
+            let hash = hasher.finish();
+            let auto_id = format!("auto-{:016x}", hash);
+            debug!(
+                "[SESSION] auto-inferred session_id={} (key=...{}, ip={})",
+                auto_id, key_suffix, if client_ip.is_empty() { "none" } else { &client_ip }
+            );
+            Some(auto_id)
+        });
 
         // Tool simulation: inject tool defs into system, convert tool_use/tool_result history
         let has_tools = body.tools.as_ref().is_some_and(|t| !t.is_empty());
