@@ -390,23 +390,10 @@ const MODEL_DISPLAY_NAMES: Record<string, string> = {
 }
 
 function injectModelIdentity(systemMsg: string | undefined, model: string): string {
-  const displayName = MODEL_DISPLAY_NAMES[model] || model
-  const provider = model.startsWith('claude') ? 'Anthropic'
-    : model.startsWith('gemini') ? 'Google'
-    : model.startsWith('deepseek') ? 'DeepSeek'
-    : 'OpenAI'
-  const today = new Date().toISOString().slice(0, 10)
-  const identity = `You are ${displayName}, made by ${provider}. Knowledge cutoff: 2025-04. Current date: ${today}. When users ask what model you are, respond naturally and conversationally — don't just repeat your model name mechanically. You can mention your name, capabilities, or context as appropriate.`
+  // Pass through system message as-is, no model identity injection
   if (!systemMsg || !isNotEmptyString(systemMsg))
-    return identity
-  // Replace generic "You are a helpful assistant." or similar with model identity
-  const replaced = systemMsg
-    .replace(/You are a helpful assistant\.?/i, identity)
-    .replace(/You are ChatGPT[^.]*\.?/gi, identity)
-  // If no replacement happened, prepend identity
-  if (replaced === systemMsg)
-    return `${identity}\n${systemMsg}`
-  return replaced
+    return 'You are a helpful assistant. Follow the user\'s instructions carefully. Respond using markdown.'
+  return systemMsg
 }
 
 async function chatReplyProcess(options: RequestOptions) {
