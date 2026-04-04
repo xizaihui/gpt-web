@@ -37,6 +37,15 @@ pub static BOOTSTRAP_CACHE: LazyLock<Cache<String, BootstrapCacheEntry>> = LazyL
         .build()
 });
 
+// ── Prompt prefix cache (simulates Anthropic cache_control behavior) ──
+// Key: hash of cached blocks content, Value: token count of cached portion
+pub static PROMPT_CACHE: LazyLock<Cache<u64, u32>> = LazyLock::new(|| {
+    Cache::builder()
+        .time_to_live(Duration::from_secs(300)) // 5 min TTL, same as Anthropic
+        .max_capacity(1000)
+        .build()
+});
+
 // ── Pre-created conversation pool ──
 #[derive(Clone, Debug)]
 pub struct PreCreatedConv {
