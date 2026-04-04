@@ -237,6 +237,9 @@ export function deleteClaudeProxy(id: string): Promise<void> {
 export function testClaudeProxyApi(id: string): Promise<{ success: boolean; ip?: string; latency?: number; error?: string }> {
   return apiPost(`/claude/proxies/${encodeURIComponent(id)}/test`)
 }
+export function probeClaudeAccountApi(id: string): Promise<{ valid: boolean; models: Array<{ model: string; available: boolean; error?: string }> }> {
+  return apiPost(`/claude/pool/accounts/${encodeURIComponent(id)}/probe`)
+}
 
 export function fetchChatAPI<T = any>(
   prompt: string,

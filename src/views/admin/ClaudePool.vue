@@ -6,6 +6,7 @@ import {
   updateClaudeAccountApi, refreshClaudeAccountApi, refreshAllClaudeAccountsApi,
   addClaudeToken, startClaudeOAuthApi, completeClaudeOAuthApi,
   fetchClaudeProxies, createClaudeProxy, deleteClaudeProxy, testClaudeProxyApi,
+  probeClaudeAccountApi,
 } from '@/api'
 
 const stats = ref({ total: 0, active: 0, expired: 0, error: 0, disabled: 0 })
@@ -13,6 +14,8 @@ const accounts = ref<any[]>([])
 const proxies = ref<any[]>([])
 const loading = ref(false)
 const expandedId = ref<string | null>(null)
+const probeResult = ref<any>(null)
+const probeLoading = ref(false)
 
 // Add token dialog
 const showAddDialog = ref(false)
@@ -96,6 +99,15 @@ async function handleToggle(id: string, current: string) {
   await loadData()
 }
 
+async function handleProbe(id: string) {
+  probeLoading.value = true
+  probeResult.value = null
+  try {
+    probeResult.value = await probeClaudeAccountApi(id)
+  } catch (e: any) { alert(e.message || '探测失败') }
+  probeLoading.value = false
+}
+
 async function handleAddProxy() {
   if (!proxyUrl.value.trim()) return
   await createClaudeProxy(proxyName.value || 'Unnamed', proxyUrl.value.trim())
@@ -171,11 +183,24 @@ function statusColor(s: string) {
             </div>
           </div>
           <!-- Expanded detail -->
-          <div v-if="expandedId === acc.id" class="px-5 py-3 bg-[#fafafa] border-t border-[#f0f0f0] text-xs text-[#52525b] grid grid-cols-2 gap-2">
-            <div>Token: {{ acc.tokenPreview }}</div>
-            <div>请求数: {{ acc.requestCount }} | 错误: {{ acc.errorCount }}</div>
-            <div>Plan: {{ acc.plan }}</div>
-            <div v-if="acc.lastError" class="text-red-500 col-span-2">错误: {{ acc.lastError }}</div>
+          <div v-if="expandedId === acc.id" class="px-5 py-3 bg-[#fafafa] border-t border-[#f0f0f0] text-xs text-[#52525b]">
+            <div class="grid grid-cols-2 gap-2 mb-3">
+              <div>Token: {{ acc.tokenPreview }}</div>
+              <div>请求数: {{ acc.requestCount }} | 错误: {{ acc.errorCount }}</div>
+              <div>Plan: {{ acc.plan }}</div>
+              <div v-if="acc.lastError" class="text-red-500 col-span-2">错误: {{ acc.lastError }}</div>
+            </div>
+            <button class="btn-secondary text-xs" :disabled="probeLoading" @click="handleProbe(acc.id)">
+              {{ probeLoading ? '探测中...' : '🔍 探测可用模型' }}
+            </button>
+            <div v-if="probeResult" class="mt-3 space-y-1">
+              <div class="font-medium mb-1">{{ probeResult.valid ? '✅ Token 有效' : '❌ Token 无效' }}</div>
+              <div v-for="m in probeResult.models" :key="m.model" class="flex items-center gap-2">
+                <span :class="m.available ? 'text-emerald-600' : 'text-red-400'">{{ m.available ? '✓' : '✗' }}</span>
+                <span>{{ m.model }}</span>
+                <span v-if="m.error" class="text-[#a1a1aa]">{{ m.error }}</span>
+              </div>
+            </div>
           </div>
         </div>
       </div>

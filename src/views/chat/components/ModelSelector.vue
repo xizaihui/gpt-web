@@ -27,8 +27,11 @@ const MODEL_GROUPS = [
   {
     provider: 'Claude Pro',
     models: [
+      { label: 'Claude Sonnet 4.6 (订阅)', value: 'claude-pool:claude-sonnet-4-6' },
       { label: 'Claude Sonnet 4 (订阅)', value: 'claude-pool:claude-sonnet-4-20250514' },
+      { label: 'Claude Opus 4.6 (订阅)', value: 'claude-pool:claude-opus-4-6' },
       { label: 'Claude Opus 4 (订阅)', value: 'claude-pool:claude-opus-4-20250918' },
+      { label: 'Claude Haiku 4.5 (订阅)', value: 'claude-pool:claude-haiku-4-5' },
     ],
   },
   {

@@ -18,7 +18,7 @@ import {
   updateClaudeAccount, refreshClaudeAccount, refreshAllClaudeAccounts,
   getClaudePoolStats, startClaudeOAuth, completeClaudeOAuth,
   listClaudeProxies, addClaudeProxy, removeClaudeProxy, updateClaudeProxy, testClaudeProxy,
-  CLAUDE_POOL_MODELS,
+  CLAUDE_POOL_MODELS, probeClaudeAccount,
 } from './claude-pool'
 
 const app = express()
@@ -579,6 +579,14 @@ router.delete('/claude/proxies/:id', auth, async (req, res) => {
 router.post('/claude/proxies/:id/test', auth, async (req, res) => {
   try {
     const result = await testClaudeProxy(req.params.id)
+    res.json({ status: 'Success', data: result })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+// Probe account: test which models are available
+router.post('/claude/pool/accounts/:id/probe', auth, async (req, res) => {
+  try {
+    const result = await probeClaudeAccount(req.params.id)
     res.json({ status: 'Success', data: result })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })

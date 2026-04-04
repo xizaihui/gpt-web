@@ -196,11 +196,9 @@ function savePool(pool: PoolStore): void {
 
 /** Build headers that exactly mimic Claude Code CLI to minimize detection */
 function buildClaudeHeaders(accessToken: string, model: string): Record<string, string> {
-  // Billing header format matches Claude Code CLI exactly
   const billingHeader = `claude-cli/${CLAUDE_CLI_VERSION} (external, cli) model=${model}`
-  return {
+  const headers: Record<string, string> = {
     'Content-Type': 'application/json',
-    'Authorization': `Bearer ${accessToken}`,
     'anthropic-version': ANTHROPIC_VERSION,
     'anthropic-beta': BETA_FLAGS,
     'anthropic-dangerous-direct-browser-access': 'true',
@@ -208,6 +206,13 @@ function buildClaudeHeaders(accessToken: string, model: string): Record<string, 
     'x-anthropic-billing-header': billingHeader,
     'user-agent': `claude-cli/${CLAUDE_CLI_VERSION} (external, cli)`,
   }
+  // OAuth tokens (sk-ant-oat-*) use Bearer auth; session/API tokens use x-api-key
+  if (accessToken.startsWith('sk-ant-oat-')) {
+    headers['Authorization'] = `Bearer ${accessToken}`
+  } else {
+    headers['x-api-key'] = accessToken
+  }
+  return headers
 }
 
 /** Extract basic info from token (Anthropic tokens are opaque, not JWT) */
@@ -727,8 +732,84 @@ export async function chatWithClaudePool(
 // ── Available Claude models ──
 export const CLAUDE_POOL_MODELS = [
   { id: 'claude-pool:claude-sonnet-4-20250514', name: 'Claude Sonnet 4 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-sonnet-4-20250514' },
+  { id: 'claude-pool:claude-sonnet-4-6', name: 'Claude Sonnet 4.6 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-sonnet-4-6' },
   { id: 'claude-pool:claude-opus-4-20250918', name: 'Claude Opus 4 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-opus-4-20250918' },
+  { id: 'claude-pool:claude-opus-4-6', name: 'Claude Opus 4.6 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-opus-4-6' },
+  { id: 'claude-pool:claude-haiku-4-5', name: 'Claude Haiku 4.5 (订阅)', provider: 'Claude Pro', claudeModel: 'claude-haiku-4-5' },
 ]
+
+// All models to probe
+const PROBE_MODELS = [
+  'claude-sonnet-4-6', 'claude-sonnet-4-20250514',
+  'claude-opus-4-6', 'claude-opus-4-20250918',
+  'claude-haiku-4-5', 'claude-haiku-4-5-20251001',
+  'claude-3-haiku-20240307',
+]
+
+/** Probe which models an account can access + check token validity */
+export async function probeClaudeAccount(accountId: string): Promise<{
+  valid: boolean
+  models: Array<{ model: string; available: boolean; error?: string }>
+  error?: string
+}> {
+  const pool = loadPool()
+  const account = pool.accounts.find(a => a.id === accountId)
+  if (!account) return { valid: false, models: [], error: 'Account not found' }
+
+  const results: Array<{ model: string; available: boolean; error?: string }> = []
+  let anySuccess = false
+
+  for (const model of PROBE_MODELS) {
+    try {
+      const headers = buildClaudeHeaders(account.accessToken, model)
+      const proxyUrl = getProxyUrl(account.proxy)
+      const response = await proxyFetch(`${API_BASE_URL}/v1/messages?beta=true`, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: 'hi' }],
+          max_tokens: 1,
+          stream: false,
+        }),
+        proxy: proxyUrl,
+      } as any)
+
+      if (response.ok) {
+        results.push({ model, available: true })
+        anySuccess = true
+        // Drain body
+        try { await response.text() } catch {}
+      } else {
+        const text = await response.text().catch(() => '')
+        const short = text.slice(0, 100)
+        if (response.status === 401 || response.status === 403) {
+          results.push({ model, available: false, error: `认证失败 (${response.status})` })
+        } else if (response.status === 400 && text.includes('model')) {
+          results.push({ model, available: false, error: '模型不可用' })
+        } else if (response.status === 429) {
+          results.push({ model, available: true, error: '限流中但可用' })
+          anySuccess = true
+        } else {
+          results.push({ model, available: false, error: `${response.status}: ${short}` })
+        }
+      }
+      // Small delay between probes to avoid rate limiting
+      await new Promise(r => setTimeout(r, 500))
+    } catch (e: any) {
+      results.push({ model, available: false, error: e.message })
+    }
+  }
+
+  // Update account status
+  if (anySuccess) {
+    account.status = 'active'
+    account.lastError = undefined
+  }
+  savePool(pool)
+
+  return { valid: anySuccess, models: results }
+}
 
 // ── Auto-refresh every 30 min ──
 setInterval(async () => {
