@@ -109,7 +109,8 @@ watch(hasApiConfig, () => {
                 <h3 class="section-title">API 配置</h3>
                 <div class="mb-3">
                   <label class="field-label">Base URL</label>
-                  <input v-model="apiBaseUrl" type="text" class="settings-input" placeholder="https://api.openai.com/v1" @change="saveApiConfig">
+                  <input v-model="apiBaseUrl" type="text" class="settings-input" placeholder="https://api.openai.com" @change="saveApiConfig">
+                  <p class="text-[11px] text-[#999] mt-1">/v1 可加可不加，系统会自动处理</p>
                 </div>
                 <div>
                   <label class="field-label">API Key</label>

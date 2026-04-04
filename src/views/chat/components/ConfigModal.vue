@@ -56,8 +56,9 @@ function close() {
           v-model="configBaseUrl"
           type="text"
           class="w-full px-3 py-2.5 bg-[#f4f4f4] border border-[#e3e3e3] rounded-xl text-sm text-[#0d0d0d] outline-none focus:border-[#999] transition-colors"
-          placeholder="https://api.openai.com/v1"
+          placeholder="https://api.openai.com"
         >
+        <p class="text-[11px] text-[#999] mt-1">/v1 可加可不加，系统会自动处理</p>
       </div>
 
       <div class="mb-6">
