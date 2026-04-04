@@ -603,6 +603,7 @@ export async function chatWithClaudePool(
   message: string,
   onProgress: ((data: any) => void) | undefined,
   reasoning?: string,
+  sessionId?: string,
 ): Promise<{ success: boolean; error?: string }> {
   // Wait if too many concurrent requests (方案2 - 并发控制)
   while (activeRequests >= MAX_CONCURRENT) {
@@ -611,7 +612,7 @@ export async function chatWithClaudePool(
   activeRequests++
 
   try {
-    return await _doClewdRChat(model, systemMessage, history, message, onProgress, reasoning)
+    return await _doClewdRChat(model, systemMessage, history, message, onProgress, reasoning, sessionId)
   } finally {
     activeRequests--
     // Trigger warm-up after request completes to keep connection alive
@@ -626,6 +627,7 @@ async function _doClewdRChat(
   message: string,
   onProgress: ((data: any) => void) | undefined,
   reasoning?: string,
+  sessionId?: string,
 ): Promise<{ success: boolean; error?: string }> {
   // Build messages in OpenAI format (ClewdR accepts this)
   const messages: Array<{ role: string; content: string }> = []
@@ -651,6 +653,9 @@ async function _doClewdRChat(
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${CLEWDR_API_KEY}`,
     'Connection': 'keep-alive',
+  }
+  if (sessionId) {
+    headers['X-Session-Id'] = sessionId
   }
 
   console.log(`[ClaudePool/ClewdR] POST ${url} | model: ${model} | msgs: ${messages.length} | warm: ${warmPool.ready}`)

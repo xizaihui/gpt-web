@@ -111,10 +111,10 @@ impl ClaudeWebState {
     /// Returns None if no suitable conversation exists.
     fn take_active_conv(&self, org_uuid: &str) -> Option<String> {
         let mut map = ACTIVE_CONV_MAP.lock().ok()?;
-        let cookie_key = self.cookie_cache_key();
+        let pool_key = self.conv_pool_key();
         let idx = map.iter().position(|c| {
             c.org_uuid == org_uuid
-                && c.cookie_key == cookie_key
+                && c.pool_key == pool_key
                 && c.msg_count < ACTIVE_CONV_MAX_MSGS
                 && c.last_used_at.elapsed().as_secs() < ACTIVE_CONV_IDLE_SECS
         })?;
@@ -143,7 +143,7 @@ impl ClaudeWebState {
             map.push(ActiveConv {
                 org_uuid: org_uuid.to_string(),
                 conv_uuid: conv_uuid.to_string(),
-                cookie_key: self.cookie_cache_key(),
+                pool_key: self.conv_pool_key(),
                 msg_count: new_count,
                 last_used_at: std::time::Instant::now(),
                 created_at: std::time::Instant::now(),
@@ -183,7 +183,7 @@ impl ClaudeWebState {
                 queue.push(crate::claude_web_state::PendingCleanup {
                     org_uuid: c.org_uuid,
                     conv_uuid: c.conv_uuid,
-                    cookie_key: c.cookie_key,
+                    cookie_key: c.pool_key.split(':').next().unwrap_or("").to_string(),
                     queued_at: std::time::Instant::now(),
                     delay_secs: delay,
                 });
@@ -208,7 +208,7 @@ impl ClaudeWebState {
             let cookie_key = self.cookie_cache_key();
             let existing = pool
                 .iter()
-                .filter(|c| c.cookie_key == cookie_key)
+                .filter(|_c| true)  // evict all idle convs regardless of session
                 .count();
             if existing >= 2 {
                 return Ok(());

@@ -402,7 +402,7 @@ function injectModelIdentity(systemMsg: string | undefined, model: string): stri
 }
 
 async function chatReplyProcess(options: RequestOptions) {
-  const { message, lastContext, process: onProgress, systemMessage, temperature, top_p, model: requestModel, apiBaseUrl: reqBaseUrl, apiKey: reqApiKey, files, history, reasoning } = options as any
+  const { message, lastContext, process: onProgress, systemMessage, temperature, top_p, model: requestModel, apiBaseUrl: reqBaseUrl, apiKey: reqApiKey, files, history, reasoning, sessionId } = options as any
   try {
     const useModel = requestModel || DEFAULT_MODEL
     const isCodex = useModel && useModel.startsWith('codex:')
@@ -428,7 +428,7 @@ async function chatReplyProcess(options: RequestOptions) {
       }
       return sendResponse({ type: 'Success', data: { id: 'codex-' + Date.now(), text: '', role: 'assistant' } })
     } else if (isClaudePool) {
-      const result = await chatWithClaudePool(actualModel, enrichedSystemMessage, history, message, onProgress, reasoning)
+      const result = await chatWithClaudePool(actualModel, enrichedSystemMessage, history, message, onProgress, reasoning, sessionId)
       if (!result.success) {
         return sendResponse({ type: 'Fail', message: result.error || 'Claude Pool API error' })
       }

@@ -63,7 +63,7 @@ pub const ACTIVE_CONV_IDLE_SECS: u64 = 1800;    // retire after 30 min idle
 pub struct ActiveConv {
     pub org_uuid: String,
     pub conv_uuid: String,
-    pub cookie_key: String,
+    pub pool_key: String,   // composite: cookie_key:session_id
     pub msg_count: u32,
     pub last_used_at: std::time::Instant,
     pub created_at: std::time::Instant,
@@ -134,10 +134,10 @@ pub struct ClaudeWebState {
     pub client: Client,
     pub key: Option<(u64, usize)>,
     pub usage: Usage,
-    // keep the last request params for potential post-call token accounting
     pub last_params: Option<CreateMessageParams>,
-    // track message count for active conversation reuse
     pub active_conv_msg_count: u32,
+    /// Session ID from X-Session-Id header — binds conversation to a specific user/browser
+    pub session_id: Option<String>,
 }
 
 impl ClaudeWebState {
@@ -159,6 +159,7 @@ impl ClaudeWebState {
             usage: Usage::default(),
             last_params: None,
             active_conv_msg_count: 0,
+            session_id: None,
         }
     }
 
@@ -178,6 +179,16 @@ impl ClaudeWebState {
             .as_ref()
             .map(|c| c.cookie.to_string())
             .unwrap_or_default()
+    }
+
+    /// Returns a composite key for the active conversation pool.
+    /// Combines cookie key + session_id so each user gets their own conversation.
+    pub fn conv_pool_key(&self) -> String {
+        let cookie = self.cookie_cache_key();
+        match &self.session_id {
+            Some(sid) if !sid.is_empty() => format!("{}:{}", cookie, sid),
+            _ => cookie,
+        }
     }
 
     /// Build a request with the current cookie, proxy settings, and browser-like headers
@@ -461,7 +472,7 @@ impl ClaudeWebState {
                 map.push(ActiveConv {
                     org_uuid: org_uuid.clone(),
                     conv_uuid: conv_uuid.clone(),
-                    cookie_key: self.cookie_cache_key(),
+                    pool_key: self.conv_pool_key(),
                     msg_count: new_count,
                     last_used_at: std::time::Instant::now(),
                     created_at: std::time::Instant::now(),

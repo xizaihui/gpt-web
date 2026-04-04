@@ -57,6 +57,8 @@ pub struct ClaudeWebContext {
     pub(super) stop_sequences: Vec<String>,
     /// User information about input and output tokens
     pub(super) usage: Usage,
+    /// Session ID from X-Session-Id header for per-user conversation binding
+    pub(super) session_id: Option<String>,
 }
 
 /// Predefined test message in Claude format for connection testing
@@ -289,6 +291,13 @@ where
     type Rejection = ClewdrError;
 
     async fn from_request(req: Request, _: &S) -> Result<Self, Self::Rejection> {
+        // Extract session ID before consuming the request
+        let session_id = req
+            .headers()
+            .get("x-session-id")
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string());
+
         let NormalizeRequest(mut body, format) = NormalizeRequest::from_request(req, &()).await?;
 
         // Tool simulation: inject tool defs into system, convert tool_use/tool_result history
@@ -320,11 +329,23 @@ where
             match body.compute_cache_key() {
                 Some((hash, cached_tokens)) => {
                     if PROMPT_CACHE.get(&hash).is_some() {
-                        // Cache hit: these tokens are "read from cache"
-                        let net = total_input_tokens.saturating_sub(cached_tokens);
-                        (0u32, cached_tokens, net)
+                        // Cache exists — randomly decide hit or miss (20-80% hit rate)
+                        let roll = uuid::Uuid::new_v4().as_bytes()[0]; // 0-255
+                        // 20%-80% → threshold range 51-204 out of 255
+                        // Use a simple hash-based jitter for per-session variance
+                        let session_jitter = (hash & 0xFF) as u8; // 0-255 from hash
+                        let threshold = 51 + (session_jitter % 154); // 51-204 → ~20%-80%
+                        if roll < threshold {
+                            // Cache hit
+                            let net = total_input_tokens.saturating_sub(cached_tokens);
+                            (0u32, cached_tokens, net)
+                        } else {
+                            // Pretend miss even though cached
+                            let net = total_input_tokens.saturating_sub(cached_tokens);
+                            (cached_tokens, 0u32, net)
+                        }
                     } else {
-                        // Cache miss: these tokens are "written to cache"
+                        // First time — always cache_creation
                         PROMPT_CACHE.insert(hash, cached_tokens);
                         let net = total_input_tokens.saturating_sub(cached_tokens);
                         (cached_tokens, 0u32, net)
@@ -344,6 +365,7 @@ where
                 cache_creation_input_tokens: cache_creation,
                 cache_read_input_tokens: cache_read,
             },
+            session_id,
         };
 
         Ok(Self(body, ClaudeContext::Web(info)))

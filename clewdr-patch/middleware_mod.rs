@@ -81,4 +81,11 @@ impl ClaudeContext {
             ClaudeContext::Code(ctx) => ctx.anthropic_beta.as_deref(),
         }
     }
+
+    pub fn session_id(&self) -> Option<&str> {
+        match self {
+            ClaudeContext::Web(ctx) => ctx.session_id.as_deref(),
+            ClaudeContext::Code(_) => None,
+        }
+    }
 }

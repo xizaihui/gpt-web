@@ -58,6 +58,8 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
   try {
     const { prompt, options = {}, systemMessage, temperature, top_p, model, history, apiBaseUrl, apiKey, files, reasoning } = req.body as RequestProps & { apiBaseUrl?: string; apiKey?: string; reasoning?: string }
 
+    const clientId = getClientId(req)
+
     // Handle client disconnect
     let clientDisconnected = false
     req.on('close', () => { clientDisconnected = true })
@@ -79,6 +81,7 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
       apiKey,
       files,
       reasoning,
+      sessionId: clientId,
     } as any)
 
     // Send done signal

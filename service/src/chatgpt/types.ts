@@ -10,6 +10,8 @@ export interface RequestOptions {
   apiBaseUrl?: string
   apiKey?: string
   files?: Array<{ name: string; type: string; base64: string }>
+  sessionId?: string  // browser fingerprint client ID for conversation binding
+  reasoning?: string
 }
 
 export interface SetProxyOptions {
