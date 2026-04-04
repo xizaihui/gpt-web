@@ -86,11 +86,16 @@ const cacheWriteTokens = computed(() => {
     <div v-else class="flex gap-3">
       <AvatarComponent :image="false" class="mt-1 flex-shrink-0" />
       <div class="min-w-0 flex-1">
-        <!-- Typing indicator — pulsing dots -->
-        <div v-if="loading && (!text || text.trim() === '') && !reasoning" class="flex items-center gap-[5px] py-2">
-          <span class="typing-dot" />
-          <span class="typing-dot [animation-delay:0.2s]" />
-          <span class="typing-dot [animation-delay:0.4s]" />
+        <!-- Typing indicator -->
+        <div v-if="loading && (!text || text.trim() === '') && !reasoning" class="py-2">
+          <!-- Thinking mode: text indicator -->
+          <span v-if="model && model.includes('-thinking')" class="thinking-text text-[13px] font-medium text-[#0066ff]">思考中...</span>
+          <!-- Normal mode: pulsing dots -->
+          <div v-else class="flex items-center gap-[5px]">
+            <span class="typing-dot" />
+            <span class="typing-dot [animation-delay:0.2s]" />
+            <span class="typing-dot [animation-delay:0.4s]" />
+          </div>
         </div>
         <!-- Reasoning / Thinking block -->
         <div v-if="reasoning" class="mb-3">
@@ -167,5 +172,12 @@ const cacheWriteTokens = computed(() => {
 @keyframes dot-pulse {
   0%, 80%, 100% { opacity: 0.3; transform: scale(0.85); }
   40% { opacity: 1; transform: scale(1); }
+}
+.thinking-text {
+  animation: thinking-breathe 1.5s ease-in-out infinite;
+}
+@keyframes thinking-breathe {
+  0%, 100% { opacity: 0.5; }
+  50% { opacity: 1; }
 }
 </style>
