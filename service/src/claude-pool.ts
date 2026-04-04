@@ -554,7 +554,101 @@ export async function completeClaudeOAuth(code: string, state: string, proxy?: s
 const CLEWDR_BASE_URL = process.env.CLEWDR_BASE_URL || 'http://216.167.78.220:8484'
 const CLEWDR_API_KEY = process.env.CLEWDR_API_KEY || ''
 
+// ── Optimization: Keep-alive HTTP agent for connection reuse (方案3) ──
+import http from 'http'
+const keepAliveAgent = new http.Agent({
+  keepAlive: true,
+  keepAliveMsecs: 30000,
+  maxSockets: 10,
+  maxFreeSockets: 5,
+})
+
+// ── Optimization: Warm-up pool for pre-bootstrapped connections (方案1) ──
+interface WarmSlot {
+  ready: boolean
+  lastWarm: number
+  warming: boolean
+}
+
+const warmPool: WarmSlot = {
+  ready: false,
+  lastWarm: 0,
+  warming: false,
+}
+
+// Pre-warm ClewdR connection by sending a minimal request
+// This forces ClewdR to bootstrap + establish TLS connection to claude.ai
+async function warmUpClewdR(): Promise<void> {
+  if (warmPool.warming) return
+  warmPool.warming = true
+  try {
+    const url = `${CLEWDR_BASE_URL}/v1/chat/completions`
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${CLEWDR_API_KEY}`,
+        'Connection': 'keep-alive',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        messages: [{ role: 'user', content: 'hi' }],
+        max_tokens: 1,
+        stream: false,
+      }),
+    })
+    if (response.ok) {
+      await response.text() // drain body
+      warmPool.ready = true
+      warmPool.lastWarm = Date.now()
+      console.log('[ClaudePool/ClewdR] Warm-up successful, connection pre-established')
+    }
+  } catch (e: any) {
+    console.warn('[ClaudePool/ClewdR] Warm-up failed:', e.message)
+  }
+  warmPool.warming = false
+}
+
+// Auto warm-up every 4 minutes (ClewdR idle timeout is ~5min)
+setInterval(() => {
+  const age = Date.now() - warmPool.lastWarm
+  if (age > 4 * 60 * 1000) {
+    warmUpClewdR()
+  }
+}, 60 * 1000)
+
+// Initial warm-up on startup
+setTimeout(() => warmUpClewdR(), 3000)
+
+// ── Optimization: Request pipeline (方案2 - connection reuse) ──
+// Track active requests to avoid concurrent bursts
+let activeRequests = 0
+const MAX_CONCURRENT = 2
+
 export async function chatWithClaudePool(
+  model: string,
+  systemMessage: string | undefined,
+  history: Array<{ role: string; content: string }> | undefined,
+  message: string,
+  onProgress: ((data: any) => void) | undefined,
+  reasoning?: string,
+): Promise<{ success: boolean; error?: string }> {
+  // Wait if too many concurrent requests (方案2 - 并发控制)
+  while (activeRequests >= MAX_CONCURRENT) {
+    await new Promise(r => setTimeout(r, 100))
+  }
+  activeRequests++
+
+  try {
+    return await _doClewdRChat(model, systemMessage, history, message, onProgress, reasoning)
+  } finally {
+    activeRequests--
+    // Trigger warm-up after request completes to keep connection alive
+    warmPool.lastWarm = Date.now()
+  }
+}
+
+async function _doClewdRChat(
   model: string,
   systemMessage: string | undefined,
   history: Array<{ role: string; content: string }> | undefined,
@@ -585,9 +679,10 @@ export async function chatWithClaudePool(
   const headers: Record<string, string> = {
     'Content-Type': 'application/json',
     'Authorization': `Bearer ${CLEWDR_API_KEY}`,
+    'Connection': 'keep-alive',
   }
 
-  console.log(`[ClaudePool/ClewdR] POST ${url} | model: ${model} | msgs: ${messages.length}`)
+  console.log(`[ClaudePool/ClewdR] POST ${url} | model: ${model} | msgs: ${messages.length} | warm: ${warmPool.ready}`)
 
   try {
     const response = await fetch(url, {
@@ -604,8 +699,6 @@ export async function chatWithClaudePool(
     }
 
     // Parse SSE stream (OpenAI format from ClewdR)
-    // ClewdR sends chunks in large blocks; we split into individual characters
-    // for smooth typing animation on the frontend
     const reader = response.body as any
     const decoder = new TextDecoder()
     let fullText = ''
@@ -629,7 +722,6 @@ export async function chatWithClaudePool(
           const parsed = JSON.parse(data)
           const delta = parsed.choices?.[0]?.delta
           if (delta?.content) {
-            // Split chunk into individual characters and emit with small delays
             const chars = [...delta.content]
             for (let i = 0; i < chars.length; i++) {
               fullText += chars[i]
@@ -640,17 +732,12 @@ export async function chatWithClaudePool(
                 model: responseModel,
                 detail: parsed,
               })
-              // Small delay between chars for smooth streaming feel
-              // Skip delay for last char or whitespace-only
               if (i < chars.length - 1 && chars[i].trim()) {
                 await new Promise(r => setTimeout(r, CHAR_DELAY))
               }
             }
           }
-          // Capture usage from streaming chunks (ClewdR may include it)
-          if (parsed.usage) {
-            finalUsage = parsed.usage
-          }
+          if (parsed.usage) finalUsage = parsed.usage
           if (parsed.model) responseModel = parsed.model
         } catch { /* skip */ }
       }
@@ -658,7 +745,6 @@ export async function chatWithClaudePool(
 
     // Estimate token usage if ClewdR didn't provide it
     if (!finalUsage) {
-      // Rough estimate: 1 token ≈ 1.5 Chinese chars or 4 English chars
       const inputText = messages.map(m => typeof m.content === 'string' ? m.content : '').join('')
       const estInput = Math.ceil(inputText.length / 2)
       const estOutput = Math.ceil(fullText.length / 2)
@@ -669,7 +755,6 @@ export async function chatWithClaudePool(
       }
     }
 
-    // Emit final usage event
     if (finalUsage) {
       finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + (finalUsage.completion_tokens || 0)
       console.log(`[ClaudePool/ClewdR] usage:`, JSON.stringify(finalUsage))
