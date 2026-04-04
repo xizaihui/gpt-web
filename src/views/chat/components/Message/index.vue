@@ -15,6 +15,7 @@ interface Props {
   dateTime?: string
   text?: string
   reasoning?: string
+  thinking?: boolean
   inversion?: boolean
   error?: boolean
   loading?: boolean
@@ -35,7 +36,7 @@ const asRawText = ref(props.inversion)
 const messageRef = ref<HTMLElement>()
 
 // In thinking mode: after 1s switch from dots to "思考中..." text
-const isThinkingModel = computed(() => props.model?.includes('-thinking'))
+const isThinkingModel = computed(() => props.thinking)
 watch(
   () => props.loading,
   (val) => {

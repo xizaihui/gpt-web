@@ -632,6 +632,7 @@ onUnmounted(() => {
               :inversion="item.inversion"
               :error="item.error"
               :loading="item.loading"
+              :thinking="item.loading && thinkingEnabled"
               :model="item.model"
               :usage="item.usage"
               @regenerate="onRegenerate(index)"
