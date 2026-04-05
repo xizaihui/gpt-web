@@ -433,3 +433,42 @@ export function purgeOldLogs() {
 // Auto-purge on startup + every hour
 purgeOldLogs()
 setInterval(purgeOldLogs, 3600_000)
+
+// ═══════════════════════════════════════════════════════════════════
+// Claude Cookie Disabled State
+// ═══════════════════════════════════════════════════════════════════
+
+db.exec(`
+  CREATE TABLE IF NOT EXISTS disabled_cookies (
+    cookie TEXT PRIMARY KEY,
+    proxy  TEXT NOT NULL DEFAULT '',
+    disabled_at TEXT NOT NULL
+  );
+`)
+
+const cookieStmts = {
+  getDisabled: db.prepare(`SELECT cookie, proxy, disabled_at FROM disabled_cookies`),
+  isDisabled: db.prepare(`SELECT 1 FROM disabled_cookies WHERE cookie = ?`),
+  addDisabled: db.prepare(`INSERT OR REPLACE INTO disabled_cookies (cookie, proxy, disabled_at) VALUES (?, ?, ?)`),
+  removeDisabled: db.prepare(`DELETE FROM disabled_cookies WHERE cookie = ?`),
+}
+
+export function listDisabledCookies(): Array<{ cookie: string; proxy: string; disabled_at: string }> {
+  return cookieStmts.getDisabled.all() as any[]
+}
+
+export function isCookieDisabled(cookie: string): boolean {
+  return !!cookieStmts.isDisabled.get(cookie)
+}
+
+export function disableCookie(cookie: string, proxy: string = '') {
+  const now = new Date().toLocaleString('sv-SE', { timeZone: 'Asia/Shanghai' }).replace('T', ' ')
+  cookieStmts.addDisabled.run(cookie, proxy, now)
+}
+
+export function enableCookie(cookie: string): { proxy: string } | null {
+  const row = db.prepare(`SELECT proxy FROM disabled_cookies WHERE cookie = ?`).get(cookie) as any
+  if (!row) return null
+  cookieStmts.removeDisabled.run(cookie)
+  return { proxy: row.proxy || '' }
+}

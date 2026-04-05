@@ -225,6 +225,18 @@ export function testClewdr(model?: string): Promise<any> {
   return apiPost('/clewdr/test', { model })
 }
 
+export function disableClewdrCookie(cookie: string, proxy?: string): Promise<void> {
+  return apiPost('/clewdr/cookies/disable', { cookie, proxy })
+}
+
+export function enableClewdrCookie(cookie: string): Promise<void> {
+  return apiPost('/clewdr/cookies/enable', { cookie })
+}
+
+export function fetchDisabledClewdrCookies(): Promise<any[]> {
+  return apiGet('/clewdr/cookies/disabled')
+}
+
 export function fetchChatAPI<T = any>(
   prompt: string,
   options?: { conversationId?: string; parentMessageId?: string },

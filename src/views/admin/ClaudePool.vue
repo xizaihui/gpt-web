@@ -1,8 +1,9 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { fetchClewdrCookies, addClewdrCookie, deleteClewdrCookie, testClewdr } from '@/api'
+import { fetchClewdrCookies, addClewdrCookie, deleteClewdrCookie, testClewdr, disableClewdrCookie, enableClewdrCookie, fetchDisabledClewdrCookies } from '@/api'
 
 const cookieData = ref<any>({ valid: [], exhausted: [], invalid: [] })
+const disabledCookies = ref<any[]>([])
 const loading = ref(false)
 const testLoading = ref(false)
 const testResult = ref<any>(null)
@@ -37,7 +38,10 @@ const avgQuota = computed(() => {
 
 async function loadData() {
   loading.value = true
-  try { cookieData.value = await fetchClewdrCookies() }
+  try {
+    cookieData.value = await fetchClewdrCookies()
+    disabledCookies.value = await fetchDisabledClewdrCookies()
+  }
   catch (e: any) { console.error('Failed to load cookies:', e) }
   loading.value = false
 }
@@ -64,6 +68,21 @@ async function handleDelete(cookie: any) {
   if (!confirm(`确定删除 ...${cookieStr.slice(-20)}？`)) return
   try { await deleteClewdrCookie(cookieStr); await loadData() }
   catch (e: any) { alert(e.message || '删除失败') }
+}
+
+async function handleDisable(cookie: any) {
+  const cookieStr = cookie.cookie || cookie.cookie_str
+  if (!cookieStr) return
+  if (!confirm(`确定禁用 ...${cookieStr.slice(-20)}？禁用后将从 ClewdR 移除`)) return
+  try { await disableClewdrCookie(cookieStr, cookie.proxy || ''); await loadData() }
+  catch (e: any) { alert(e.message || '禁用失败') }
+}
+
+async function handleEnable(cookie: any) {
+  const cookieStr = cookie.cookie
+  if (!cookieStr) return
+  try { await enableClewdrCookie(cookieStr); await loadData() }
+  catch (e: any) { alert(e.message || '启用失败') }
 }
 
 async function handleTest() {
@@ -159,7 +178,7 @@ const expandedCookie = ref<string | null>(null)
 
       <!-- Cookie List -->
       <div class="bg-white rounded-xl border border-[#e5e7eb] overflow-hidden">
-        <div class="px-5 py-3 border-b border-[#e5e7eb] text-xs font-medium text-[#71717a] grid grid-cols-[1fr_60px_90px_90px_90px_50px] gap-2">
+        <div class="px-5 py-3 border-b border-[#e5e7eb] text-xs font-medium text-[#71717a] grid grid-cols-[1fr_60px_90px_90px_90px_80px] gap-2">
           <span>Cookie</span><span>状态</span><span>会话配额</span><span>7天配额</span><span>代理</span><span>操作</span>
         </div>
         <div v-if="allCookies.length === 0" class="px-5 py-8 text-center text-sm text-[#a1a1aa]">
@@ -167,7 +186,7 @@ const expandedCookie = ref<string | null>(null)
         </div>
         <div v-for="c in allCookies" :key="c.cookie">
           <div
-            class="grid grid-cols-[1fr_60px_90px_90px_90px_50px] gap-2 px-5 py-3 items-center hover:bg-[#fafafa] cursor-pointer text-sm border-t border-[#f0f0f0]"
+            class="grid grid-cols-[1fr_60px_90px_90px_90px_80px] gap-2 px-5 py-3 items-center hover:bg-[#fafafa] cursor-pointer text-sm border-t border-[#f0f0f0]"
             @click="expandedCookie = expandedCookie === c.cookie ? null : c.cookie"
           >
             <!-- Cookie -->
@@ -191,7 +210,10 @@ const expandedCookie = ref<string | null>(null)
             <!-- Proxy -->
             <div class="text-xs text-[#71717a] truncate">{{ c.proxy || '全局' }}</div>
             <!-- Actions -->
-            <div><button class="p-1 hover:bg-red-50 rounded text-red-500" title="删除" @click.stop="handleDelete(c)">🗑️</button></div>
+            <div class="flex gap-1">
+              <button class="p-1 hover:bg-amber-50 rounded text-amber-500" title="禁用" @click.stop="handleDisable(c)">⏸️</button>
+              <button class="p-1 hover:bg-red-50 rounded text-red-500" title="删除" @click.stop="handleDelete(c)">🗑️</button>
+            </div>
           </div>
 
           <!-- Expanded Detail -->
@@ -293,6 +315,20 @@ const expandedCookie = ref<string | null>(null)
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Disabled Cookies -->
+      <div v-if="disabledCookies.length > 0" class="bg-white rounded-xl border border-[#e5e7eb] overflow-hidden mt-6">
+        <div class="px-5 py-3 border-b border-[#e5e7eb] flex items-center justify-between">
+          <span class="text-xs font-medium text-[#71717a]">已禁用 ({{ disabledCookies.length }})</span>
+        </div>
+        <div v-for="c in disabledCookies" :key="c.cookie" class="grid grid-cols-[1fr_120px_80px] gap-2 px-5 py-3 items-center text-sm border-t border-[#f0f0f0]">
+          <div class="truncate font-mono text-xs text-[#a1a1aa]">...{{ c.cookie.slice(-24) }}</div>
+          <div class="text-xs text-[#a1a1aa]">{{ c.disabled_at }}</div>
+          <div>
+            <button class="px-2 py-1 text-xs bg-emerald-50 text-emerald-600 rounded hover:bg-emerald-100 transition-colors" @click="handleEnable(c)">▶️ 启用</button>
           </div>
         </div>
       </div>

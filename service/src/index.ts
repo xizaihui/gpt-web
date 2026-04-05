@@ -604,6 +604,40 @@ router.post('/clewdr/test', adminAuth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
+// Disable a cookie: remove from ClewdR + save to local disabled list
+router.post('/clewdr/cookies/disable', adminAuth, async (req, res) => {
+  try {
+    const { cookie, proxy } = req.body
+    if (!cookie) throw new Error('cookie is required')
+    // Remove from ClewdR
+    await clewdrFetch('/api/cookie', { method: 'DELETE', body: JSON.stringify({ cookie }) })
+    // Save to local disabled list
+    storage.disableCookie(cookie, proxy || '')
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+// Enable a cookie: remove from disabled list + add back to ClewdR
+router.post('/clewdr/cookies/enable', adminAuth, async (req, res) => {
+  try {
+    const { cookie } = req.body
+    if (!cookie) throw new Error('cookie is required')
+    const info = storage.enableCookie(cookie)
+    // Add back to ClewdR
+    const body: any = { cookie }
+    if (info?.proxy) body.proxy = info.proxy
+    await clewdrFetch('/api/cookie', { method: 'POST', body: JSON.stringify(body) })
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+// Get disabled cookies list
+router.get('/clewdr/cookies/disabled', adminAuth, async (_req, res) => {
+  try {
+    res.json({ status: 'Success', data: storage.listDisabledCookies() })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
 // ─── Request Logs ──────────────────────────────────────────────────
 
 router.get('/log/list', adminAuth, async (req, res) => {
