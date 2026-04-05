@@ -41,7 +41,7 @@ pub static BOOTSTRAP_CACHE: LazyLock<Cache<String, BootstrapCacheEntry>> = LazyL
 // Key: hash of cached blocks content, Value: token count of cached portion
 pub static PROMPT_CACHE: LazyLock<Cache<u64, u32>> = LazyLock::new(|| {
     Cache::builder()
-        .time_to_live(Duration::from_secs(300)) // 5 min TTL, same as Anthropic
+        .time_to_live(Duration::from_secs(120)) // 2 min TTL, ~50% hit rate
         .max_capacity(1000)
         .build()
 });
@@ -54,6 +54,24 @@ pub struct PreCreatedConv {
     pub cookie_key: String,
     pub created_at: std::time::Instant,
 }
+
+// ── Active conversation pool: reuse conversations across requests (like real users) ──
+pub const ACTIVE_CONV_MAX_MSGS: u32 = 20;       // retire after 20 messages
+pub const ACTIVE_CONV_IDLE_SECS: u64 = 1800;    // retire after 30 min idle
+
+#[derive(Clone, Debug)]
+pub struct ActiveConv {
+    pub org_uuid: String,
+    pub conv_uuid: String,
+    pub pool_key: String,   // composite: cookie_key:session_id
+    pub msg_count: u32,
+    pub cumulative_tokens: u32, // total tokens in this conversation window (for cache stats)
+    pub last_used_at: std::time::Instant,
+    pub created_at: std::time::Instant,
+}
+
+pub static ACTIVE_CONV_MAP: LazyLock<std::sync::Mutex<Vec<ActiveConv>>> =
+    LazyLock::new(|| std::sync::Mutex::new(Vec::new()));
 
 // ── Delayed cleanup queue: delete conversations after a random delay ──
 #[derive(Clone, Debug)]
@@ -117,8 +135,14 @@ pub struct ClaudeWebState {
     pub client: Client,
     pub key: Option<(u64, usize)>,
     pub usage: Usage,
-    // keep the last request params for potential post-call token accounting
     pub last_params: Option<CreateMessageParams>,
+    pub active_conv_msg_count: u32,
+    /// Session ID from X-Session-Id header
+    pub session_id: Option<String>,
+    /// Whether this request is reusing an existing active conversation
+    pub is_reusing_conv: bool,
+    /// Cumulative tokens in the reused conversation (for cache_read estimation)
+    pub reused_conv_tokens: u32,
 }
 
 impl ClaudeWebState {
@@ -139,6 +163,10 @@ impl ClaudeWebState {
             key: None,
             usage: Usage::default(),
             last_params: None,
+            active_conv_msg_count: 0,
+            session_id: None,
+            is_reusing_conv: false,
+            reused_conv_tokens: 0,
         }
     }
 
@@ -158,6 +186,16 @@ impl ClaudeWebState {
             .as_ref()
             .map(|c| c.cookie.to_string())
             .unwrap_or_default()
+    }
+
+    /// Returns a composite key for the active conversation pool.
+    /// Combines cookie key + session_id so each user gets their own conversation.
+    pub fn conv_pool_key(&self) -> String {
+        let cookie = self.cookie_cache_key();
+        match &self.session_id {
+            Some(sid) if !sid.is_empty() => format!("{}:{}", cookie, sid),
+            _ => cookie,
+        }
     }
 
     /// Build a request with the current cookie, proxy settings, and browser-like headers
@@ -209,8 +247,15 @@ impl ClaudeWebState {
 
     /// Requests a new cookie from the cookie manager
     /// Updates the internal state with the new cookie and proxy configuration
+    /// Uses session_id hash for cookie affinity (same session → same cookie → better cache hit)
     pub async fn request_cookie(&mut self) -> Result<CookieStatus, ClewdrError> {
-        let res = self.cookie_actor_handle.request(None).await?;
+        let session_hash = self.session_id.as_ref().map(|sid| {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            sid.hash(&mut hasher);
+            hasher.finish()
+        });
+        let res = self.cookie_actor_handle.request(session_hash).await?;
         self.cookie = Some(res.to_owned());
         self.endpoint = CLEWDR_CONFIG.load().endpoint();
 
@@ -398,9 +443,30 @@ impl ClaudeWebState {
         }
     }
 
-    /// Queue conversation for delayed deletion instead of immediate delete.
-    /// This looks more natural — real users don't delete chats within milliseconds.
-    /// Conversations are deleted 30-120 seconds later by the cleanup task.
+    /// On error: immediately retire the conversation (don't return to active pool).
+    /// Queues for delayed deletion.
+    pub async fn retire_conv_on_error(&self) {
+        let Some(ref org_uuid) = self.org_uuid else { return };
+        let Some(ref conv_uuid) = self.conv_uuid else { return };
+        // Remove from active pool if it was there
+        if let Ok(mut map) = ACTIVE_CONV_MAP.lock() {
+            map.retain(|c| c.conv_uuid != *conv_uuid);
+        }
+        let delay = 30 + (uuid::Uuid::new_v4().as_bytes()[0] as u64 % 90);
+        if let Ok(mut queue) = CLEANUP_QUEUE.lock() {
+            queue.push(PendingCleanup {
+                org_uuid: org_uuid.clone(),
+                conv_uuid: conv_uuid.clone(),
+                cookie_key: self.cookie_cache_key(),
+                queued_at: std::time::Instant::now(),
+                delay_secs: delay,
+            });
+        }
+        self.process_cleanup_queue().await;
+    }
+
+    /// After a successful request: return conversation to active pool for reuse.
+    /// Only queues for deletion when the conversation is retired (msg limit or error).
     pub async fn clean_chat(&self) -> Result<(), ClewdrError> {
         if CLEWDR_CONFIG.load().preserve_chats {
             return Ok(());
@@ -412,17 +478,46 @@ impl ClaudeWebState {
             return Ok(());
         };
 
-        // Queue for delayed deletion
-        let delay = 30 + (uuid::Uuid::new_v4().as_bytes()[0] as u64 % 90); // 30-120 seconds
-        if let Ok(mut queue) = CLEANUP_QUEUE.lock() {
-            queue.push(PendingCleanup {
-                org_uuid: org_uuid.clone(),
-                conv_uuid: conv_uuid.clone(),
-                cookie_key: self.cookie_cache_key(),
-                queued_at: std::time::Instant::now(),
-                delay_secs: delay,
-            });
-            debug!("Queued chat {} for deletion in {}s", conv_uuid, delay);
+        let new_count = self.active_conv_msg_count + 1;
+
+        if new_count < ACTIVE_CONV_MAX_MSGS {
+            // Accumulate tokens: previous cached + this request's input + output
+            let new_cumulative = self.reused_conv_tokens
+                + self.usage.input_tokens
+                + self.usage.output_tokens
+                + self.usage.cache_creation_input_tokens;
+            // Return to active pool for reuse
+            if let Ok(mut map) = ACTIVE_CONV_MAP.lock() {
+                map.push(ActiveConv {
+                    org_uuid: org_uuid.clone(),
+                    conv_uuid: conv_uuid.clone(),
+                    pool_key: self.conv_pool_key(),
+                    msg_count: new_count,
+                    cumulative_tokens: new_cumulative,
+                    last_used_at: std::time::Instant::now(),
+                    created_at: std::time::Instant::now(),
+                });
+                info!(
+                    "[ACTIVE-CONV] returned {} to pool (msg {}/{}, cumulative_tokens={})",
+                    conv_uuid, new_count, ACTIVE_CONV_MAX_MSGS, new_cumulative
+                );
+            }
+        } else {
+            // Conversation hit message limit — retire it with delayed deletion
+            info!(
+                "[ACTIVE-CONV] retiring {} after {} messages, queuing deletion",
+                conv_uuid, new_count
+            );
+            let delay = 30 + (uuid::Uuid::new_v4().as_bytes()[0] as u64 % 90);
+            if let Ok(mut queue) = CLEANUP_QUEUE.lock() {
+                queue.push(PendingCleanup {
+                    org_uuid: org_uuid.clone(),
+                    conv_uuid: conv_uuid.clone(),
+                    cookie_key: self.cookie_cache_key(),
+                    queued_at: std::time::Instant::now(),
+                    delay_secs: delay,
+                });
+            }
         }
 
         // Process any conversations that are past their delay
