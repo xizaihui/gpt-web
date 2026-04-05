@@ -3,6 +3,7 @@ import { sendResponse } from '../utils'
 import { isNotEmptyString } from '../utils/is'
 import type { RequestOptions } from './types'
 import { chatWithCodex, CODEX_MODELS } from '../codex'
+import { recordRequestLog } from '../storage'
 import { chatWithClaudePool, CLAUDE_POOL_MODELS } from '../claude-pool'
 import { getEncoding } from 'js-tiktoken'
 
@@ -293,6 +294,7 @@ async function chatWithOpenAI(
   onProgress: ((data: any) => void) | undefined,
   lastContext: any,
 ) {
+  const _logStartMs = Date.now()
   const messages: any[] = []
 
   if (isNotEmptyString(systemMessage)) {
@@ -398,6 +400,19 @@ async function chatWithOpenAI(
     }
 
     console.log(`[OpenAI] usage:`, JSON.stringify(finalUsage))
+    // Record request log
+    try {
+      recordRequestLog({
+        model: useModel,
+        client_id: lastContext?.clientId || '',
+        session_id: lastContext?.sessionId || '',
+        duration_ms: Date.now() - _logStartMs,
+        input_tokens: finalUsage.user_message_tokens || 0,
+        output_tokens: finalUsage.completion_tokens || 0,
+        cache_read_tokens: finalUsage.cache_read_input_tokens || finalUsage.prompt_tokens_details?.cached_tokens || 0,
+        cache_write_tokens: finalUsage.cache_creation_input_tokens || 0,
+      })
+    } catch (e) { console.error('[Log] record failed:', e) }
     onProgress?.({
       id: 'usage',
       text: fullText,

@@ -604,6 +604,44 @@ router.post('/clewdr/test', auth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
+// ─── Request Logs ──────────────────────────────────────────────────
+
+router.get('/log/list', auth, async (req, res) => {
+  try {
+    const result = storage.queryRequestLogs({
+      page: Number(req.query.page) || 1,
+      pageSize: Number(req.query.pageSize) || 20,
+      model: req.query.model as string,
+      client_id: req.query.client_id as string,
+      date_from: req.query.date_from as string,
+      date_to: req.query.date_to as string,
+    })
+    res.json({ status: 'Success', data: result })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.get('/log/stats', auth, async (req, res) => {
+  try {
+    const stats = storage.getLogStats(req.query.date_from as string, req.query.date_to as string)
+    res.json({ status: 'Success', data: stats })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.get('/log/settings', auth, async (_req, res) => {
+  try {
+    res.json({ status: 'Success', data: { retention_days: storage.getLogSetting('retention_days') } })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/log/settings', auth, async (req, res) => {
+  try {
+    const { retention_days } = req.body
+    if (retention_days) storage.setLogSetting('retention_days', String(retention_days))
+    storage.purgeOldLogs()
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
 app.use('', router)
 app.use('/api', router)
 app.set('trust proxy', 1)

@@ -16,6 +16,7 @@ import { fileURLToPath } from 'url'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import * as dotenv from 'dotenv'
 import { getEncoding } from 'js-tiktoken'
+import { recordRequestLog } from './storage'
 
 dotenv.config()
 
@@ -669,6 +670,7 @@ async function _doClewdRChat(
   reasoning?: string,
   sessionId?: string,
 ): Promise<{ success: boolean; error?: string }> {
+  const _logStartMs = Date.now()
   // Build messages in OpenAI format (ClewdR accepts this)
   const messages: Array<{ role: string; content: string }> = []
   if (systemMessage) {
@@ -812,6 +814,19 @@ async function _doClewdRChat(
       // Add current user message token count for display
       finalUsage.user_message_tokens = userMsgTokens
       console.log(`[ClaudePool/ClewdR] usage:`, JSON.stringify(finalUsage))
+      // Record request log
+      try {
+        recordRequestLog({
+          model: responseModel || model,
+          client_id: sessionId?.split(':')[0] || '',
+          session_id: sessionId || '',
+          duration_ms: Date.now() - _logStartMs,
+          input_tokens: finalUsage.user_message_tokens || 0,
+          output_tokens: finalUsage.completion_tokens || outputTokens || 0,
+          cache_read_tokens: finalUsage.cache_read_input_tokens || 0,
+          cache_write_tokens: finalUsage.cache_creation_input_tokens || 0,
+        })
+      } catch (e: any) { console.error('[Log] record failed:', e) }
       onProgress?.({
         id: 'usage',
         text: fullText,

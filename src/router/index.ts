@@ -40,6 +40,11 @@ const routes: RouteRecordRaw[] = [
         name: 'AdminProxies',
         component: () => import('@/views/admin/Proxies.vue'),
       },
+      {
+        path: 'logs',
+        name: 'AdminLogs',
+        component: () => import('@/views/admin/Logs.vue'),
+      },
     ],
   },
 
