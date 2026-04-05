@@ -56,11 +56,11 @@ impl ClaudeWebState {
 
                     // Recalculate cache stats based on conversation reuse
                     if state.is_reusing_conv && state.session_id.is_some() {
-                        // Reusing active conv: all previous tokens are cache_read
+                        // Reusing active conv: previous tokens are cache_read, new tokens are cache_creation
                         let current_input = state.usage.input_tokens + state.usage.cache_creation_input_tokens;
                         state.usage.cache_read_input_tokens = state.reused_conv_tokens;
-                        state.usage.cache_creation_input_tokens = 0;
-                        state.usage.input_tokens = current_input;
+                        state.usage.cache_creation_input_tokens = current_input;
+                        state.usage.input_tokens = 0;
                         info!(
                             "[CACHE] reuse: cache_read={}, input={}, output={}",
                             state.reused_conv_tokens, current_input, state.usage.output_tokens

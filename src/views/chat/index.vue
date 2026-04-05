@@ -305,6 +305,7 @@ async function streamChat(
     signal: controller.signal,
     history,
     reasoning: thinkingEnabled.value ? 'high' : undefined,
+    chatUuid: +uuid,
     onProgress: (data) => {
       waitingForFirstToken.value = false
       const responseModel = data.detail?.model || data.model || selectedModel.value

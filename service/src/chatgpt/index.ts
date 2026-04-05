@@ -4,8 +4,15 @@ import { isNotEmptyString } from '../utils/is'
 import type { RequestOptions } from './types'
 import { chatWithCodex, CODEX_MODELS } from '../codex'
 import { chatWithClaudePool, CLAUDE_POOL_MODELS } from '../claude-pool'
+import { getEncoding } from 'js-tiktoken'
 
 dotenv.config()
+
+// Tokenizer for accurate token counting
+const enc = getEncoding('cl100k_base')
+function countTokens(text: string): number {
+  return enc.encode(text).length
+}
 
 // Default config
 const API_BASE_URL = isNotEmptyString(process.env.OPENAI_API_BASE_URL)
@@ -210,13 +217,19 @@ async function chatWithClaude(
         if (parsed.type === 'message_start' && parsed.message) {
           responseModel = parsed.message.model || useModel
           if (parsed.message.usage) {
+            const u = parsed.message.usage
+            const cacheCreation = u.cache_creation_input_tokens || 0
+            const cacheRead = u.cache_read_input_tokens || 0
+            const inputTokens = u.input_tokens || 0
+            // OAI prompt_tokens = total input = input_tokens + cache_creation + cache_read
+            const promptTokens = inputTokens + cacheCreation + cacheRead
             finalUsage = {
-              prompt_tokens: parsed.message.usage.input_tokens || 0,
+              prompt_tokens: promptTokens,
               completion_tokens: 0,
-              total_tokens: parsed.message.usage.input_tokens || 0,
-              // Anthropic cache fields
-              cache_creation_input_tokens: parsed.message.usage.cache_creation_input_tokens || 0,
-              cache_read_input_tokens: parsed.message.usage.cache_read_input_tokens || 0,
+              total_tokens: promptTokens,
+              cache_creation_input_tokens: cacheCreation,
+              cache_read_input_tokens: cacheRead,
+              prompt_tokens_details: { cached_tokens: cacheRead },
             }
           }
         }
@@ -236,8 +249,13 @@ async function chatWithClaude(
         // message_delta: final usage (output tokens)
         if (parsed.type === 'message_delta' && parsed.usage) {
           if (finalUsage) {
-            finalUsage.completion_tokens = parsed.usage.output_tokens || 0
-            finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + (parsed.usage.output_tokens || 0)
+            // ClewdR may return output_tokens=0; count from fullText if needed
+            let outputTokens = parsed.usage.output_tokens || 0
+            if (outputTokens === 0 && fullText.length > 0) {
+              outputTokens = countTokens(fullText)
+            }
+            finalUsage.completion_tokens = outputTokens
+            finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + outputTokens
           }
         }
       } catch (e) {
@@ -248,6 +266,8 @@ async function chatWithClaude(
 
   // Send final usage
   if (finalUsage) {
+    // Add current user message token count for display
+    finalUsage.user_message_tokens = countTokens(message)
     console.log(`[Claude Native] usage:`, JSON.stringify(finalUsage))
     onProgress?.({
       id: 'usage',
@@ -356,6 +376,27 @@ async function chatWithOpenAI(
   }
 
   if (finalUsage) {
+    // Add current user message token count
+    const userMsgTokens = countTokens(message)
+    finalUsage.user_message_tokens = userMsgTokens
+
+    // Calculate cache_write per Claude Prompt Caching doc:
+    // R1: cache_write = all input (system + user msg)
+    // RN: cache_write = prev_output + current_user_msg
+    const cacheRead = finalUsage.cache_read_input_tokens || finalUsage.prompt_tokens_details?.cached_tokens || 0
+    const reportedCacheWrite = finalUsage.cache_creation_input_tokens || finalUsage.claude_cache_creation_5_m_tokens || 0
+
+    if (reportedCacheWrite === 0 && cacheRead > 0 && history && history.length > 0) {
+      // Get last assistant message token count
+      const lastAssistant = [...history].reverse().find((m: any) => m.role === 'assistant')
+      const prevOutputTokens = lastAssistant ? countTokens(lastAssistant.content || '') : 0
+      // cache_write = prev output + current user message + framing overhead
+      finalUsage.cache_creation_input_tokens = prevOutputTokens + userMsgTokens + 4
+    } else if (reportedCacheWrite === 0 && cacheRead === 0) {
+      // R1: all input is cache_write (use prompt_tokens from API)
+      finalUsage.cache_creation_input_tokens = finalUsage.prompt_tokens || 0
+    }
+
     console.log(`[OpenAI] usage:`, JSON.stringify(finalUsage))
     onProgress?.({
       id: 'usage',
@@ -407,9 +448,11 @@ async function chatReplyProcess(options: RequestOptions) {
     const useModel = requestModel || DEFAULT_MODEL
     const isCodex = useModel && useModel.startsWith('codex:')
     const isClaudePool = useModel && useModel.startsWith('claude-pool:')
-    const isClaude = !isClaudePool && useModel && (useModel.startsWith('claude-') || useModel.includes('claude'))
     const useBaseUrl = (reqBaseUrl && isNotEmptyString(reqBaseUrl)) ? reqBaseUrl : API_BASE_URL
     const useApiKey = (reqApiKey && isNotEmptyString(reqApiKey)) ? reqApiKey : API_KEY
+    // Use Claude Native format only for direct Anthropic API, not for proxies like NewAPI
+    const isDirectAnthropic = useBaseUrl && (useBaseUrl.includes('anthropic.com') || useBaseUrl.includes('api.claude.'))
+    const isClaude = !isClaudePool && isDirectAnthropic && useModel && (useModel.startsWith('claude-') || useModel.includes('claude'))
 
     // Resolve actual model name for identity injection
     const actualModel = isCodex

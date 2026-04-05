@@ -15,10 +15,14 @@ import crypto from 'crypto'
 import { fileURLToPath } from 'url'
 import { ProxyAgent, fetch as undiciFetch } from 'undici'
 import * as dotenv from 'dotenv'
+import { getEncoding } from 'js-tiktoken'
 
 dotenv.config()
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
+
+// Claude 3/4 tokenizer (cl100k_base is the closest match)
+const enc = getEncoding('cl100k_base')
 const DATA_DIR = path.join(__dirname, '..', 'data')
 const POOL_FILE = path.join(DATA_DIR, 'claude-pool.json')
 const PROXY_FILE = path.join(DATA_DIR, 'claude-proxies.json')
@@ -596,6 +600,42 @@ async function warmUpClewdR(): Promise<void> {
 let activeRequests = 0
 const MAX_CONCURRENT = 2
 
+// Per-session cache tracking for accurate cache stats per Claude Prompt Caching doc.
+// Tracks cumulative prompt tokens so far, so next round's cache_read = this round's cumulative.
+// Key: sessionId, Value: { cumulativePrompt, lastOutputTokens, updatedAt }
+const sessionCacheMap = new Map<string, { cumulativePrompt: number; lastOutputTokens: number; updatedAt: number }>()
+const CACHE_TTL_MS = 5 * 60 * 1000 // 5 minutes, matching Claude's cache TTL
+
+function getSessionCache(sessionId: string) {
+  const entry = sessionCacheMap.get(sessionId)
+  if (!entry) return null
+  if (Date.now() - entry.updatedAt > CACHE_TTL_MS) {
+    sessionCacheMap.delete(sessionId)
+    return null // Cache expired
+  }
+  return entry
+}
+
+function setSessionCache(sessionId: string, cumulativePrompt: number, outputTokens: number) {
+  sessionCacheMap.set(sessionId, { cumulativePrompt, lastOutputTokens: outputTokens, updatedAt: Date.now() })
+  if (sessionCacheMap.size > 1000) {
+    const now = Date.now()
+    for (const [k, v] of sessionCacheMap) {
+      if (now - v.updatedAt > CACHE_TTL_MS) sessionCacheMap.delete(k)
+    }
+  }
+}
+
+// Accurate token count using cl100k_base tokenizer (closest to Claude 3/4)
+function countTokens(text: string): number {
+  return enc.encode(text).length
+}
+
+// Count tokens for a single message including role framing overhead (~4 tokens)
+function countMessageTokens(role: string, content: string): number {
+  return countTokens(content) + 4 // role + formatting overhead
+}
+
 export async function chatWithClaudePool(
   model: string,
   systemMessage: string | undefined,
@@ -658,7 +698,7 @@ async function _doClewdRChat(
     headers['X-Session-Id'] = sessionId
   }
 
-  console.log(`[ClaudePool/ClewdR] POST ${url} | model: ${model} | msgs: ${messages.length} | warm: ${warmPool.ready}`)
+  console.log(`[ClaudePool/ClewdR] POST ${url} | model: ${model} | msgs: ${messages.length} | warm: ${warmPool.ready} | sid: ${sessionId || 'none'}`)
 
   try {
     const response = await fetch(url, {
@@ -732,7 +772,45 @@ async function _doClewdRChat(
     }
 
     if (finalUsage) {
-      finalUsage.total_tokens = (finalUsage.prompt_tokens || 0) + (finalUsage.completion_tokens || 0)
+      const outputTokens = finalUsage.completion_tokens || 0
+
+      // Per Claude Prompt Caching doc:
+      // R1: cache_read=0, cache_write=all_input (system + user₁)
+      // RN: cache_read=R(N-1).prompt_tokens, cache_write=R(N-1).output + user_N tokens
+      // prompt_tokens = cache_read + cache_write
+      const prevSession = sessionId ? getSessionCache(sessionId) : null
+
+      // Accurate token count for the current user message
+      const userMsgTokens = countMessageTokens('user', message)
+
+      let cacheRead: number, cacheWrite: number, promptTotal: number
+
+      if (prevSession) {
+        // Continuing conversation
+        cacheRead = prevSession.cumulativePrompt
+        // cache_write = last round's output + this round's user message
+        cacheWrite = prevSession.lastOutputTokens + userMsgTokens
+        promptTotal = cacheRead + cacheWrite
+      } else {
+        // First message or cache expired: count system + user message
+        const systemTokens = systemMessage ? countMessageTokens('system', systemMessage) : 0
+        cacheRead = 0
+        cacheWrite = systemTokens + userMsgTokens
+        promptTotal = cacheWrite
+      }
+
+      finalUsage.prompt_tokens = promptTotal
+      finalUsage.cache_read_input_tokens = cacheRead
+      finalUsage.cache_creation_input_tokens = cacheWrite
+      finalUsage.prompt_tokens_details = { cached_tokens: cacheRead }
+      finalUsage.total_tokens = promptTotal + outputTokens
+
+      // Save cumulative prompt for next round
+      if (sessionId) {
+        setSessionCache(sessionId, promptTotal, outputTokens)
+      }
+      // Add current user message token count for display
+      finalUsage.user_message_tokens = userMsgTokens
       console.log(`[ClaudePool/ClewdR] usage:`, JSON.stringify(finalUsage))
       onProgress?.({
         id: 'usage',

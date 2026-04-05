@@ -157,11 +157,10 @@ const cacheWriteTokens = computed(() => {
           <div v-if="usage && usage.total_tokens" class="ml-2 flex items-center gap-1 border-l border-[#e3e3e3] pl-2">
             <Icon name="clock" :size="12" class="text-[#aaa]" />
             <span class="select-none whitespace-nowrap text-[11px] text-[#aaa]">
-              {{ usage.prompt_tokens ?? 0 }} 入
-              <template v-if="cachedTokens > 0"><span class="text-[#10a37f]">({{ cachedTokens }} 缓存读)</span></template>
-              <template v-if="cacheWriteTokens > 0"><span class="text-[#e8912d]">({{ cacheWriteTokens }} 缓存写)</span></template>
+              {{ usage.user_message_tokens ?? usage.prompt_tokens ?? 0 }} 入
+              <template v-if="cachedTokens > 0"><span class="text-[#10a37f]"> · {{ cachedTokens }} 缓存读</span></template>
+              <template v-if="cacheWriteTokens > 0"><span class="text-[#e8912d]"> · {{ cacheWriteTokens }} 缓存写</span></template>
               · {{ usage.completion_tokens ?? 0 }} 出
-              · {{ usage.total_tokens }} 总
             </span>
           </div>
         </div>

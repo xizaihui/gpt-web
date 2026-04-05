@@ -259,6 +259,7 @@ export async function fetchChatAPIProcess<T = any>(
     files?: Array<{ name: string; type: string; base64: string }>
     history?: Array<{ role: string; content: string }>
     reasoning?: string  // 'high' | 'medium' | 'low' | undefined
+    chatUuid?: number   // unique chat window id
   },
 ): Promise<void> {
   const settingStore = useSettingStore()
@@ -280,6 +281,9 @@ export async function fetchChatAPIProcess<T = any>(
 
   if (params.reasoning)
     data.reasoning = params.reasoning
+
+  if (params.chatUuid)
+    data.chatUuid = params.chatUuid
 
   const apiBaseUrl = params.apiBaseUrl || settingStore.apiBaseUrl
   const apiKey = params.apiKey || settingStore.apiKey

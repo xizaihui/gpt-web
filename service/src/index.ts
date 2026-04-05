@@ -48,6 +48,7 @@ app.all('*', (req, res, next) => {
 })
 
 router.post('/chat-process', [auth, limiter], async (req, res) => {
+  console.log(`[chat-process] model=${req.body?.model} chatUuid=${req.body?.chatUuid} clientId=${(req.headers['x-client-id'] as string) || 'default'}`)
   // Use proper SSE content type for true streaming
   res.setHeader('Content-Type', 'text/event-stream; charset=utf-8')
   res.setHeader('Cache-Control', 'no-cache')
@@ -56,9 +57,11 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
   res.flushHeaders()
 
   try {
-    const { prompt, options = {}, systemMessage, temperature, top_p, model, history, apiBaseUrl, apiKey, files, reasoning } = req.body as RequestProps & { apiBaseUrl?: string; apiKey?: string; reasoning?: string }
+    const { prompt, options = {}, systemMessage, temperature, top_p, model, history, apiBaseUrl, apiKey, files, reasoning, chatUuid } = req.body as RequestProps & { apiBaseUrl?: string; apiKey?: string; reasoning?: string; chatUuid?: number }
 
     const clientId = getClientId(req)
+    // Per-chat session id: each chat window gets its own Claude conversation
+    const sessionId = chatUuid ? `${clientId}:${chatUuid}` : clientId
 
     // Handle client disconnect
     let clientDisconnected = false
@@ -81,7 +84,7 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
       apiKey,
       files,
       reasoning,
-      sessionId: clientId,
+      sessionId,
     } as any)
 
     // Send done signal
