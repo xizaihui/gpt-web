@@ -14,6 +14,7 @@ const db = new Database(DB_PATH, {})
 // Enable WAL mode for better concurrent read performance
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
+db.pragma('busy_timeout = 5000')
 
 // Create tables (for fresh DBs — includes client_id from the start)
 db.exec(`

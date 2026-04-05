@@ -4,8 +4,10 @@ import {
   NDataTable, NCard, NSpace, NButton, NInput, NSelect, NDatePicker,
   NStatistic, NGrid, NGi, NPagination, NPopover, NTag, NSpin, useMessage,
 } from 'naive-ui'
+import { useAuthStore } from '@/store'
 
 const message = useMessage()
+const authStore = useAuthStore()
 const loading = ref(false)
 const statsLoading = ref(false)
 
@@ -22,7 +24,7 @@ const API_BASE = '/api'
 
 async function apiFetch(path: string, opts?: any) {
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${localStorage.getItem('SECRET_TOKEN') || ''}` },
+    headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${authStore.token || ''}` },
     ...opts,
   })
   return res.json()

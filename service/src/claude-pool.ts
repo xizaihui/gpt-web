@@ -627,6 +627,14 @@ function setSessionCache(sessionId: string, cumulativePrompt: number, outputToke
   }
 }
 
+// Periodic cleanup to prevent memory leak from abandoned sessions
+setInterval(() => {
+  const now = Date.now()
+  for (const [k, v] of sessionCacheMap) {
+    if (now - v.updatedAt > CACHE_TTL_MS) sessionCacheMap.delete(k)
+  }
+}, CACHE_TTL_MS)
+
 // Accurate token count using cl100k_base tokenizer (closest to Claude 3/4)
 function countTokens(text: string): number {
   return enc.encode(text).length
@@ -707,6 +715,7 @@ async function _doClewdRChat(
       method: 'POST',
       headers,
       body: JSON.stringify(requestBody),
+      signal: AbortSignal.timeout(180_000),
     })
 
     if (!response.ok) {
@@ -724,6 +733,7 @@ async function _doClewdRChat(
     let responseModel = model
     let finalUsage: any = null
     const CHAR_DELAY = 8 // ms between characters for smooth fast typing
+    let _pendingFlush = 0
 
     for await (const chunk of reader) {
       buffer += decoder.decode(chunk, { stream: true })
@@ -750,9 +760,16 @@ async function _doClewdRChat(
                 model: responseModel,
                 detail: parsed,
               })
+              // Delay between chars for typewriter effect
               if (i < chars.length - 1 && chars[i].trim()) {
                 await new Promise(r => setTimeout(r, CHAR_DELAY))
               }
+            }
+            // Small delay between SSE events to prevent TCP batching
+            _pendingFlush++
+            if (_pendingFlush >= 1) {
+              await new Promise(r => setTimeout(r, CHAR_DELAY))
+              _pendingFlush = 0
             }
           }
           if (parsed.usage) finalUsage = parsed.usage

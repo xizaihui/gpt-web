@@ -9,10 +9,15 @@ import { getEncoding } from 'js-tiktoken'
 
 dotenv.config()
 
-// Tokenizer for accurate token counting
-const enc = getEncoding('cl100k_base')
+// Tokenizer for accurate token counting (lazy init with fallback)
+let _enc: any = null
 function countTokens(text: string): number {
-  return enc.encode(text).length
+  try {
+    if (!_enc) _enc = getEncoding('cl100k_base')
+    return _enc.encode(text).length
+  } catch {
+    return Math.ceil(text.length / 4) // rough fallback
+  }
 }
 
 // Default config
@@ -109,6 +114,7 @@ async function chatWithClaude(
   onProgress: ((data: any) => void) | undefined,
   lastContext: any,
 ) {
+  const _logStartMs = Date.now()
   // Build system blocks (top-level, with cache_control)
   const systemBlocks: any[] = []
   if (isNotEmptyString(systemMessage)) {
@@ -185,6 +191,7 @@ async function chatWithClaude(
       'anthropic-beta': 'prompt-caching-2024-07-31',
     },
     body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(180_000),
   })
 
   if (!response.ok) {
@@ -270,6 +277,18 @@ async function chatWithClaude(
     // Add current user message token count for display
     finalUsage.user_message_tokens = countTokens(message)
     console.log(`[Claude Native] usage:`, JSON.stringify(finalUsage))
+    try {
+      recordRequestLog({
+        model: useModel,
+        client_id: lastContext?.clientId || '',
+        session_id: lastContext?.sessionId || '',
+        duration_ms: Date.now() - _logStartMs,
+        input_tokens: finalUsage.user_message_tokens || 0,
+        output_tokens: finalUsage.completion_tokens || 0,
+        cache_read_tokens: finalUsage.cache_read_input_tokens || 0,
+        cache_write_tokens: finalUsage.cache_creation_input_tokens || 0,
+      })
+    } catch (e) { console.error('[Log] record failed:', e) }
     onProgress?.({
       id: 'usage',
       text: fullText,
@@ -332,6 +351,7 @@ async function chatWithOpenAI(
       'Authorization': `Bearer ${useApiKey}`,
     },
     body: JSON.stringify(requestBody),
+    signal: AbortSignal.timeout(180_000),
   })
 
   if (!response.ok) {
@@ -370,6 +390,8 @@ async function chatWithOpenAI(
             model: parsed.model || useModel,
             detail: parsed,
           })
+          // Small delay to flush SSE to client (prevents TCP batching)
+          await new Promise(r => setTimeout(r, 8))
         }
       } catch (e) {
         // skip

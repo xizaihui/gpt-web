@@ -2,7 +2,7 @@ import express from 'express'
 import type { RequestProps } from './types'
 import type { ChatMessage } from './chatgpt'
 import { chatReplyProcess, chatConfig, currentModel } from './chatgpt'
-import { auth } from './middleware/auth'
+import { auth, adminAuth } from './middleware/auth'
 import { limiter } from './middleware/limiter'
 import { isNotEmptyString } from './utils/is'
 import * as storage from './storage'
@@ -280,7 +280,7 @@ router.post('/conversations/import', auth, async (req, res) => {
 // ---- Codex Account Pool Management ----
 
 // Pool stats overview
-router.get('/codex/pool/stats', auth, async (_req, res) => {
+router.get('/codex/pool/stats', adminAuth, async (_req, res) => {
   try {
     const stats = getPoolStats()
     res.json({ status: 'Success', data: stats })
@@ -290,7 +290,7 @@ router.get('/codex/pool/stats', auth, async (_req, res) => {
 })
 
 // List all accounts (tokens masked)
-router.get('/codex/pool/accounts', auth, async (_req, res) => {
+router.get('/codex/pool/accounts', adminAuth, async (_req, res) => {
   try {
     const accounts = listAccounts()
     res.json({ status: 'Success', data: accounts })
@@ -300,7 +300,7 @@ router.get('/codex/pool/accounts', auth, async (_req, res) => {
 })
 
 // Sync from OpenClaw
-router.post('/codex/pool/sync', auth, async (_req, res) => {
+router.post('/codex/pool/sync', adminAuth, async (_req, res) => {
   try {
     const count = syncFromOpenClaw()
     res.json({ status: 'Success', data: { synced: count } })
@@ -310,7 +310,7 @@ router.post('/codex/pool/sync', auth, async (_req, res) => {
 })
 
 // Remove account
-router.delete('/codex/pool/accounts/:id', auth, async (req, res) => {
+router.delete('/codex/pool/accounts/:id', adminAuth, async (req, res) => {
   try {
     const ok = removeAccount(req.params.id)
     if (!ok) throw new Error('Account not found')
@@ -321,7 +321,7 @@ router.delete('/codex/pool/accounts/:id', auth, async (req, res) => {
 })
 
 // Update account (proxy, status)
-router.patch('/codex/pool/accounts/:id', auth, async (req, res) => {
+router.patch('/codex/pool/accounts/:id', adminAuth, async (req, res) => {
   try {
     const ok = updateAccount(req.params.id, req.body)
     if (!ok) throw new Error('Account not found')
@@ -332,7 +332,7 @@ router.patch('/codex/pool/accounts/:id', auth, async (req, res) => {
 })
 
 // Refresh single account token
-router.post('/codex/pool/accounts/:id/refresh', auth, async (req, res) => {
+router.post('/codex/pool/accounts/:id/refresh', adminAuth, async (req, res) => {
   try {
     const result = await refreshAccount(req.params.id)
     if (!result.success) throw new Error(result.error)
@@ -343,7 +343,7 @@ router.post('/codex/pool/accounts/:id/refresh', auth, async (req, res) => {
 })
 
 // Refresh all account tokens
-router.post('/codex/pool/refresh-all', auth, async (_req, res) => {
+router.post('/codex/pool/refresh-all', adminAuth, async (_req, res) => {
   try {
     const result = await refreshAllAccounts()
     res.json({ status: 'Success', data: result })
@@ -353,7 +353,7 @@ router.post('/codex/pool/refresh-all', auth, async (_req, res) => {
 })
 
 // Start OAuth authorization flow
-router.post('/codex/oauth/start', auth, async (_req, res) => {
+router.post('/codex/oauth/start', adminAuth, async (_req, res) => {
   try {
     const result = await startOAuthFlow()
     res.json({ status: 'Success', data: result })
@@ -400,7 +400,7 @@ router.get('/codex/oauth/callback', async (req, res) => {
 })
 
 // Complete OAuth with manual code paste
-router.post('/codex/oauth/complete', auth, async (req, res) => {
+router.post('/codex/oauth/complete', adminAuth, async (req, res) => {
   try {
     const { code, state, proxy } = req.body
     if (!code || !state) throw new Error('Missing code or state')
@@ -413,7 +413,7 @@ router.post('/codex/oauth/complete', auth, async (req, res) => {
 })
 
 // Query quota for a single account
-router.get('/codex/pool/accounts/:id/quota', auth, async (req, res) => {
+router.get('/codex/pool/accounts/:id/quota', adminAuth, async (req, res) => {
   try {
     const quota = await queryAccountQuota(req.params.id)
     if (!quota) throw new Error('Account not found')
@@ -424,7 +424,7 @@ router.get('/codex/pool/accounts/:id/quota', auth, async (req, res) => {
 })
 
 // Query quota for all accounts
-router.get('/codex/pool/quotas', auth, async (_req, res) => {
+router.get('/codex/pool/quotas', adminAuth, async (_req, res) => {
   try {
     const quotas = await queryAllQuotas()
     res.json({ status: 'Success', data: quotas })
@@ -435,7 +435,7 @@ router.get('/codex/pool/quotas', auth, async (_req, res) => {
 
 // ---- Proxy Management ----
 
-router.get('/codex/proxies', auth, async (_req, res) => {
+router.get('/codex/proxies', adminAuth, async (_req, res) => {
   try {
     res.json({ status: 'Success', data: listProxies() })
   } catch (e: any) {
@@ -443,7 +443,7 @@ router.get('/codex/proxies', auth, async (_req, res) => {
   }
 })
 
-router.post('/codex/proxies', auth, async (req, res) => {
+router.post('/codex/proxies', adminAuth, async (req, res) => {
   try {
     const { name, url } = req.body
     if (!name || !url) throw new Error('name and url required')
@@ -454,7 +454,7 @@ router.post('/codex/proxies', auth, async (req, res) => {
   }
 })
 
-router.patch('/codex/proxies/:id', auth, async (req, res) => {
+router.patch('/codex/proxies/:id', adminAuth, async (req, res) => {
   try {
     const ok = updateProxy(req.params.id, req.body)
     if (!ok) throw new Error('Proxy not found')
@@ -464,7 +464,7 @@ router.patch('/codex/proxies/:id', auth, async (req, res) => {
   }
 })
 
-router.delete('/codex/proxies/:id', auth, async (req, res) => {
+router.delete('/codex/proxies/:id', adminAuth, async (req, res) => {
   try {
     const ok = removeProxy(req.params.id)
     if (!ok) throw new Error('Proxy not found')
@@ -474,7 +474,7 @@ router.delete('/codex/proxies/:id', auth, async (req, res) => {
   }
 })
 
-router.post('/codex/proxies/:id/test', auth, async (req, res) => {
+router.post('/codex/proxies/:id/test', adminAuth, async (req, res) => {
   try {
     const result = await testProxy(req.params.id)
     res.json({ status: 'Success', data: result })
@@ -486,7 +486,7 @@ router.post('/codex/proxies/:id/test', auth, async (req, res) => {
 // ── ClewdR Admin API (proxy to ClewdR backend) ──
 
 const CLEWDR_ADMIN_URL = process.env.CLEWDR_BASE_URL || 'http://216.167.78.220:8484'
-const CLEWDR_ADMIN_PW = process.env.CLEWDR_ADMIN_KEY || 'e4C4FFLtyvwXA4fcabZC8FNqqHvRs5K4kW9jwmpEKf7B4sKcDebTqTVmMcpSdsnM'
+const CLEWDR_ADMIN_PW = process.env.CLEWDR_ADMIN_KEY || ''
 
 async function clewdrFetch(path: string, options: any = {}): Promise<any> {
   const url = `${CLEWDR_ADMIN_URL}${path}`
@@ -508,7 +508,7 @@ async function clewdrFetch(path: string, options: any = {}): Promise<any> {
 }
 
 // Get all cookies (accounts)
-router.get('/clewdr/cookies', auth, async (_req, res) => {
+router.get('/clewdr/cookies', adminAuth, async (_req, res) => {
   try {
     const data = await clewdrFetch('/api/cookies?refresh=true')
     res.json({ status: 'Success', data })
@@ -516,7 +516,7 @@ router.get('/clewdr/cookies', auth, async (_req, res) => {
 })
 
 // Add a cookie (account) — ClewdR uses /api/cookie (singular) for POST
-router.post('/clewdr/cookies', auth, async (req, res) => {
+router.post('/clewdr/cookies', adminAuth, async (req, res) => {
   try {
     const { cookie, proxy } = req.body
     if (!cookie) throw new Error('cookie is required')
@@ -531,7 +531,7 @@ router.post('/clewdr/cookies', auth, async (req, res) => {
 })
 
 // Delete a cookie (account) — ClewdR uses /api/cookie (singular) for DELETE
-router.delete('/clewdr/cookies', auth, async (req, res) => {
+router.delete('/clewdr/cookies', adminAuth, async (req, res) => {
   try {
     const { cookie } = req.body
     if (!cookie) throw new Error('cookie is required')
@@ -544,7 +544,7 @@ router.delete('/clewdr/cookies', auth, async (req, res) => {
 })
 
 // Update cookie — ClewdR uses /api/cookie (singular) for PUT
-router.put('/clewdr/cookies', auth, async (req, res) => {
+router.put('/clewdr/cookies', adminAuth, async (req, res) => {
   try {
     await clewdrFetch('/api/cookie', {
       method: 'PUT',
@@ -555,7 +555,7 @@ router.put('/clewdr/cookies', auth, async (req, res) => {
 })
 
 // Get ClewdR config
-router.get('/clewdr/config', auth, async (_req, res) => {
+router.get('/clewdr/config', adminAuth, async (_req, res) => {
   try {
     const data = await clewdrFetch('/api/config')
     res.json({ status: 'Success', data })
@@ -563,7 +563,7 @@ router.get('/clewdr/config', auth, async (_req, res) => {
 })
 
 // Update ClewdR config
-router.post('/clewdr/config', auth, async (req, res) => {
+router.post('/clewdr/config', adminAuth, async (req, res) => {
   try {
     await clewdrFetch('/api/config', {
       method: 'POST',
@@ -574,7 +574,7 @@ router.post('/clewdr/config', auth, async (req, res) => {
 })
 
 // Get available models
-router.get('/clewdr/models', auth, async (_req, res) => {
+router.get('/clewdr/models', adminAuth, async (_req, res) => {
   try {
     const data = await clewdrFetch('/api/models')
     res.json({ status: 'Success', data })
@@ -582,7 +582,7 @@ router.get('/clewdr/models', auth, async (_req, res) => {
 })
 
 // Test a cookie by sending a minimal request
-router.post('/clewdr/test', auth, async (req, res) => {
+router.post('/clewdr/test', adminAuth, async (req, res) => {
   try {
     const apiKey = process.env.CLEWDR_API_KEY || ''
     const testRes = await fetch(`${CLEWDR_ADMIN_URL}/v1/chat/completions`, {
@@ -606,7 +606,7 @@ router.post('/clewdr/test', auth, async (req, res) => {
 
 // ─── Request Logs ──────────────────────────────────────────────────
 
-router.get('/log/list', auth, async (req, res) => {
+router.get('/log/list', adminAuth, async (req, res) => {
   try {
     const result = storage.queryRequestLogs({
       page: Number(req.query.page) || 1,
@@ -620,23 +620,27 @@ router.get('/log/list', auth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.get('/log/stats', auth, async (req, res) => {
+router.get('/log/stats', adminAuth, async (req, res) => {
   try {
     const stats = storage.getLogStats(req.query.date_from as string, req.query.date_to as string)
     res.json({ status: 'Success', data: stats })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.get('/log/settings', auth, async (_req, res) => {
+router.get('/log/settings', adminAuth, async (_req, res) => {
   try {
     res.json({ status: 'Success', data: { retention_days: storage.getLogSetting('retention_days') } })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/log/settings', auth, async (req, res) => {
+router.post('/log/settings', adminAuth, async (req, res) => {
   try {
     const { retention_days } = req.body
-    if (retention_days) storage.setLogSetting('retention_days', String(retention_days))
+    if (retention_days) {
+      const days = parseInt(String(retention_days), 10)
+      if (isNaN(days) || days < 1 || days > 365) throw new Error('retention_days must be 1-365')
+      storage.setLogSetting('retention_days', String(days))
+    }
     storage.purgeOldLogs()
     res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
