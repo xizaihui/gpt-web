@@ -237,6 +237,16 @@ export function fetchDisabledClewdrCookies(): Promise<any[]> {
   return apiGet('/clewdr/cookies/disabled')
 }
 
+export function fetchClewdrLogs(params?: Record<string, any>): Promise<any> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : ''
+  return apiGet(`/clewdr/logs${qs}`)
+}
+
+export function fetchClewdrLogStats(params?: Record<string, any>): Promise<any> {
+  const qs = params ? '?' + new URLSearchParams(params).toString() : ''
+  return apiGet(`/clewdr/logs/stats${qs}`)
+}
+
 export function fetchChatAPI<T = any>(
   prompt: string,
   options?: { conversationId?: string; parentMessageId?: string },

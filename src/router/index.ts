@@ -36,6 +36,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/admin/ClaudePool.vue'),
       },
       {
+        path: 'clewdr-logs',
+        name: 'AdminClewdrLogs',
+        component: () => import('@/views/admin/ClewdrLogs.vue'),
+      },
+      {
         path: 'proxies',
         name: 'AdminProxies',
         component: () => import('@/views/admin/Proxies.vue'),
