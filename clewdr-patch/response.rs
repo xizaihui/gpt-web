@@ -128,6 +128,7 @@ impl ClaudeWebState {
                                         if text.len() > 1 {
                                             split = true;
                                             let idx = evt.index.unwrap_or(0);
+                                            let evt_id = event.id.clone();
                                             for ch in text.chars() {
                                                 let chunk = serde_json::json!({
                                                     "type": "content_block_delta",
@@ -136,6 +137,7 @@ impl ClaudeWebState {
                                                 });
                                                 let e = SseEvent::default()
                                                     .event("content_block_delta")
+                                                    .id(evt_id.clone())
                                                     .data(chunk.to_string());
                                                 yield e;
                                             }
