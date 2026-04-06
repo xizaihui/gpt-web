@@ -599,11 +599,7 @@ onUnmounted(() => {
         </button>
         <!-- Mobile hamburger -->
         <HeaderComponent v-if="isMobile" />
-
-        <!-- Model selector -->
-        <ModelSelector v-model="selectedModel" />
       </div>
-
     </div>
 
     <!-- Click outside to close attach menu -->
@@ -615,39 +611,165 @@ onUnmounted(() => {
 
     <!-- Main scrollable area -->
     <main class="flex-1 overflow-hidden">
-      <div id="scrollRef" ref="scrollRef" class="h-full overflow-y-auto">
-        <!-- Empty state -->
-        <div v-if="!dataSources.length" class="flex flex-col items-center justify-center h-full px-4">
-          <h1 class="text-[32px] font-medium text-[#0d0d0d]">今天有什么计划？</h1>
-        </div>
+      <div id="scrollRef" ref="scrollRef" class="h-full overflow-y-auto" :class="!dataSources.length ? 'flex flex-col' : ''">
+        <!-- Empty state: centered greeting + input -->
+        <template v-if="!dataSources.length">
+          <div class="flex-1" />
+          <div class="flex flex-col items-center px-4 w-full max-w-[48rem] mx-auto">
+            <h1 class="text-[32px] font-medium text-[#0d0d0d] mb-6">今天有什么计划？</h1>
+
+            <!-- Centered input box -->
+            <div class="w-full">
+              <div class="relative flex flex-col bg-white rounded-3xl border border-[#d9d9e3] shadow-sm">
+                <input
+                  ref="fileInputRef"
+                  type="file"
+                  multiple
+                  accept="image/*,.pdf,.txt,.md,.json,.csv,.xml,.py,.js,.ts,.java,.go,.rs,.c,.cpp,.h,.zip,.tar.gz"
+                  class="hidden"
+                  @change="handleFileSelect"
+                >
+                <!-- Attached files preview -->
+                <div v-if="attachedFiles.length" class="flex flex-wrap gap-2 px-4 pt-3">
+                  <div v-for="(file, idx) in attachedFiles" :key="file.name" class="relative group">
+                    <div v-if="file.type.startsWith('image/')" class="w-14 h-14 rounded-lg overflow-hidden border border-[#e3e3e3]">
+                      <img :src="file.previewUrl" :alt="file.name" class="w-full h-full object-cover" />
+                    </div>
+                    <div v-else class="flex items-center gap-2 px-3 py-2 bg-[#f4f4f4] rounded-lg border border-[#e3e3e3] max-w-[200px]">
+                      <Icon name="file-text" :size="14" class="text-[#666] flex-shrink-0" :stroke-width="1.8" />
+                      <span class="text-xs text-[#0d0d0d] truncate">{{ file.name }}</span>
+                      <span class="text-[10px] text-[#999] whitespace-nowrap">{{ formatFileSize(file.size) }}</span>
+                    </div>
+                    <button class="absolute -top-1.5 -right-1.5 w-5 h-5 bg-[#666] text-white rounded-full flex items-center justify-center opacity-0 group-hover:opacity-100 transition-opacity text-xs leading-none" @click="removeFile(idx)">×</button>
+                  </div>
+                </div>
+                <!-- Textarea -->
+                <div class="px-4 pt-3 pb-1">
+                  <textarea
+                    ref="inputRef"
+                    v-model="prompt"
+                    class="w-full bg-transparent resize-none outline-none text-[16px] text-[#0d0d0d] placeholder-[#999] leading-[1.5] max-h-[200px] min-h-[24px]"
+                    placeholder="有问题，尽管问"
+                    rows="1"
+                    style="height: 24px;"
+                    @input="autoResize"
+                    @keydown="handleEnter"
+                  />
+                </div>
+                <!-- Bottom toolbar -->
+                <div class="flex items-center justify-between px-3 pb-[10px]">
+                  <div class="flex items-center gap-0.5">
+                    <!-- + Attach -->
+                    <div class="relative">
+                      <button class="icon-btn-sm text-[#666] hover:text-[#0d0d0d]" title="附件" @click="toggleAttachMenu">
+                        <Icon name="plus" :size="20" :stroke-width="1.8" />
+                      </button>
+                      <div v-if="showAttachMenu" class="absolute bottom-full left-0 mb-2 w-[220px] menu-panel z-[60]">
+                        <button class="menu-item" @click="openFilePicker" @mouseenter="showRecentSubmenu = false">
+                          <Icon name="paperclip" :size="18" :stroke-width="1.8" />
+                          <span>添加照片和文件</span>
+                        </button>
+                        <div class="relative">
+                          <button class="menu-item" @mouseenter="showRecentSubmenu = true" @click="showRecentSubmenu = !showRecentSubmenu">
+                            <Icon name="file" :size="18" :stroke-width="1.8" />
+                            <span class="flex-1">近期文件</span>
+                            <Icon name="chevron-right" :size="14" />
+                          </button>
+                          <div v-if="showRecentSubmenu" class="absolute left-full top-0 ml-1 w-[240px] menu-panel z-[61] max-h-[320px] overflow-y-auto" @mouseleave="showRecentSubmenu = false">
+                            <button class="menu-item" @click="openFilePicker">
+                              <Icon name="folder" :size="16" :stroke-width="1.8" />
+                              <span>从库中添加</span>
+                            </button>
+                            <div v-if="recentFiles.length > 0" class="border-t border-[#f0f0f0] my-1" />
+                            <div v-if="recentFiles.length > 0" class="px-4 pt-1.5 pb-1 text-[11px] font-medium text-[#999]">最近</div>
+                            <button v-for="file in recentFiles" :key="file.name + file.addedAt" class="flex items-center gap-3 w-full px-4 py-2 text-sm text-[#0d0d0d] hover:bg-[#f4f4f4] transition-colors text-left" @click="attachRecentFile(file)">
+                              <div class="w-5 h-5 flex items-center justify-center flex-shrink-0">
+                                <Icon v-if="file.type.startsWith('image/')" name="image" :size="16" class="text-[#999]" :stroke-width="1.8" />
+                                <Icon v-else name="circle" :size="16" class="text-[#999]" :stroke-width="1.8" />
+                              </div>
+                              <div class="flex-1 min-w-0">
+                                <div class="truncate text-[13px]">{{ file.name }}</div>
+                                <div class="text-[11px] text-[#999]">{{ formatRecentDate(file.addedAt) }}</div>
+                              </div>
+                            </button>
+                            <div v-if="recentFiles.length === 0" class="px-4 py-3 text-[13px] text-[#999] text-center">暂无近期文件</div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                    <!-- 思考 -->
+                    <button
+                      class="flex items-center gap-1.5 px-2.5 py-1 text-[13px] rounded-full transition-all font-medium"
+                      :class="thinkingEnabled ? 'text-[#0066ff] bg-blue-50 ring-1 ring-blue-200' : 'text-[#b4b4b4] hover:text-[#666] hover:bg-[#f4f4f4]'"
+                      @click="thinkingEnabled = !thinkingEnabled"
+                    >
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 0-8 8c0 3.4 2.1 6.3 5 7.4V20a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2.6c2.9-1.1 5-4 5-7.4a8 8 0 0 0-8-8z" /><line x1="9" y1="23" x2="15" y2="23" /></svg>
+                      <span>思考</span>
+                      <template v-if="thinkingEnabled">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18" /><line x1="6" y1="6" x2="18" y2="18" /></svg>
+                      </template>
+                    </button>
+                    <!-- Model selector pills -->
+                    <ModelSelector v-model="selectedModel" />
+                  </div>
+                  <div class="flex items-center gap-1">
+                    <button class="icon-btn-sm text-[#666] hover:text-[#0d0d0d]"><Icon name="mic" :size="18" :stroke-width="1.8" /></button>
+                    <button v-if="loading" class="flex items-center justify-center w-8 h-8 rounded-full bg-black hover:bg-[#2b2b2b] transition-colors" @click="handleStop"><Icon name="stop" :size="14" /></button>
+                    <button v-else class="flex items-center justify-center w-8 h-8 rounded-full transition-all" :class="buttonDisabled ? 'bg-[#d9d9e3] text-white cursor-not-allowed' : 'bg-black text-white hover:bg-[#2b2b2b] cursor-pointer'" :disabled="buttonDisabled" @click="handleSubmit"><Icon name="arrow-up" :size="16" :stroke-width="2.5" /></button>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <!-- Suggestions (only in empty state) -->
+            <div class="flex flex-wrap justify-center gap-2 mt-4 mb-2">
+              <button
+                v-for="s in suggestions"
+                :key="s.text"
+                class="flex items-center gap-1.5 px-3.5 py-2 text-[13px] text-[#666] bg-[#f9f9f9] hover:bg-[#f0f0f0] border border-[#e8e8e8] rounded-full transition-colors"
+                @click="handleSuggestion(s.prompt)"
+              >
+                <span>{{ s.icon }}</span>
+                <span>{{ s.text }}</span>
+              </button>
+            </div>
+
+            <p class="text-center text-[11px] text-[#ccc] mt-2 leading-normal">
+              ChatGPT 可能会犯错。请核查重要信息。
+            </p>
+          </div>
+          <div class="flex-1" />
+        </template>
 
         <!-- Messages -->
-        <div v-else class="max-w-[48rem] mx-auto px-4 py-6">
-          <div id="image-wrapper">
-            <Message
-              v-for="(item, index) of dataSources"
-              :key="`${item.dateTime}-${index}`"
-              :date-time="item.dateTime"
-              :text="item.text"
-              :reasoning="item.reasoning"
-              :inversion="item.inversion"
-              :error="item.error"
-              :loading="item.loading"
-              :thinking="item.loading && thinkingEnabled"
-              :model="item.model"
-              :usage="item.usage"
-              @regenerate="onRegenerate(index)"
-              @delete="handleDelete(index)"
-            />
+        <template v-else>
+          <div class="max-w-[48rem] mx-auto px-4 py-6">
+            <div id="image-wrapper">
+              <Message
+                v-for="(item, index) of dataSources"
+                :key="`${item.dateTime}-${index}`"
+                :date-time="item.dateTime"
+                :text="item.text"
+                :reasoning="item.reasoning"
+                :inversion="item.inversion"
+                :error="item.error"
+                :loading="item.loading"
+                :thinking="item.loading && thinkingEnabled"
+                :model="item.model"
+                :usage="item.usage"
+                @regenerate="onRegenerate(index)"
+                @delete="handleDelete(index)"
+              />
+            </div>
           </div>
-        </div>
+        </template>
       </div>
     </main>
 
-    <!-- Input area -->
-    <footer class="px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
+    <!-- Input area (only when there are messages — empty state has its own centered input) -->
+    <footer v-if="dataSources.length" class="px-3 pb-3 pt-2 sm:px-4 sm:pb-4">
       <div class="max-w-[48rem] mx-auto">
-        <!-- Input box - white bg, visible border, matches ChatGPT screenshot -->
+        <!-- Input box -->
         <div class="relative flex flex-col bg-white rounded-3xl border border-[#d9d9e3] shadow-sm">
           <!-- Hidden file input -->
           <input
@@ -694,9 +816,9 @@ onUnmounted(() => {
             />
           </div>
 
-          <!-- Bottom toolbar: + | 思考 ... mic | send — all on same line -->
+          <!-- Bottom toolbar -->
           <div class="flex items-center justify-between px-3 pb-[10px]">
-            <!-- Left group: + attach menu, 思考 -->
+            <!-- Left group: + attach, 思考, model pills -->
             <div class="flex items-center gap-0.5">
               <!-- + Attach button with dropdown menu -->
               <div class="relative">
@@ -713,7 +835,6 @@ onUnmounted(() => {
                   v-if="showAttachMenu"
                   class="absolute bottom-full left-0 mb-2 w-[220px] menu-panel z-[60]"
                 >
-                  <!-- 添加照片和文件 -->
                   <button
                     class="menu-item"
                     @click="openFilePicker"
@@ -722,8 +843,6 @@ onUnmounted(() => {
                     <Icon name="paperclip" :size="18" :stroke-width="1.8" />
                     <span>添加照片和文件</span>
                   </button>
-
-                  <!-- 近期文件 (with submenu) -->
                   <div class="relative">
                     <button
                       class="menu-item"
@@ -734,36 +853,23 @@ onUnmounted(() => {
                       <span class="flex-1">近期文件</span>
                       <Icon name="chevron-right" :size="14" />
                     </button>
-
-                    <!-- Recent files submenu -->
                     <div
                       v-if="showRecentSubmenu"
                       class="absolute left-full top-0 ml-1 w-[240px] menu-panel z-[61] max-h-[320px] overflow-y-auto"
                       @mouseleave="showRecentSubmenu = false"
                     >
-                      <!-- 从库中添加 -->
-                      <button
-                        class="menu-item"
-                        @click="openFilePicker"
-                      >
+                      <button class="menu-item" @click="openFilePicker">
                         <Icon name="folder" :size="16" :stroke-width="1.8" />
                         <span>从库中添加</span>
                       </button>
-
                       <div v-if="recentFiles.length > 0" class="border-t border-[#f0f0f0] my-1" />
-
-                      <div v-if="recentFiles.length > 0" class="px-4 pt-1.5 pb-1 text-[11px] font-medium text-[#999]">
-                        最近
-                      </div>
-
-                      <!-- Recent file items -->
+                      <div v-if="recentFiles.length > 0" class="px-4 pt-1.5 pb-1 text-[11px] font-medium text-[#999]">最近</div>
                       <button
                         v-for="file in recentFiles"
                         :key="file.name + file.addedAt"
                         class="flex items-center gap-3 w-full px-4 py-2 text-sm text-[#0d0d0d] hover:bg-[#f4f4f4] transition-colors text-left"
                         @click="attachRecentFile(file)"
                       >
-                        <!-- File type icon -->
                         <div class="w-5 h-5 flex items-center justify-center flex-shrink-0">
                           <Icon v-if="file.type.startsWith('image/')" name="image" :size="16" class="text-[#999]" :stroke-width="1.8" />
                           <Icon v-else name="circle" :size="16" class="text-[#999]" :stroke-width="1.8" />
@@ -773,11 +879,7 @@ onUnmounted(() => {
                           <div class="text-[11px] text-[#999]">{{ formatRecentDate(file.addedAt) }}</div>
                         </div>
                       </button>
-
-                      <!-- Empty state -->
-                      <div v-if="recentFiles.length === 0" class="px-4 py-3 text-[13px] text-[#999] text-center">
-                        暂无近期文件
-                      </div>
+                      <div v-if="recentFiles.length === 0" class="px-4 py-3 text-[13px] text-[#999] text-center">暂无近期文件</div>
                     </div>
                   </div>
                 </div>
@@ -801,15 +903,15 @@ onUnmounted(() => {
                   </svg>
                 </template>
               </button>
+              <!-- Model selector pills -->
+              <ModelSelector v-model="selectedModel" />
             </div>
 
             <!-- Right group: mic, send/stop -->
             <div class="flex items-center gap-1">
-              <!-- Microphone button -->
               <button class="icon-btn-sm text-[#666] hover:text-[#0d0d0d]">
                 <Icon name="mic" :size="18" :stroke-width="1.8" />
               </button>
-              <!-- Stop button when loading -->
               <button
                 v-if="loading"
                 class="flex items-center justify-center w-8 h-8 rounded-full bg-black hover:bg-[#2b2b2b] transition-colors"
@@ -817,7 +919,6 @@ onUnmounted(() => {
               >
                 <Icon name="stop" :size="14" />
               </button>
-              <!-- Send button -->
               <button
                 v-else
                 class="flex items-center justify-center w-8 h-8 rounded-full transition-all"
@@ -831,7 +932,7 @@ onUnmounted(() => {
           </div>
         </div>
 
-        <!-- Disclaimer (very subtle) -->
+        <!-- Disclaimer -->
         <p class="text-center text-[11px] text-[#ccc] mt-2 leading-normal">
           ChatGPT 可能会犯错。请核查重要信息。
         </p>
