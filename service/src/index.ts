@@ -808,6 +808,105 @@ router.post('/log/settings', auth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
+// ── Gemini Gateway Admin API ──
+
+const GEMINI_GW_URL = process.env.GEMINI_GW_BASE_URL || 'http://154.36.173.198:8001'
+const GEMINI_GW_KEY = process.env.GEMINI_GW_API_KEY || 'gemini-gw-xz527-secret-key'
+
+async function geminiGwFetch(path: string, options: any = {}): Promise<any> {
+  const url = `${GEMINI_GW_URL}${path}`
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${GEMINI_GW_KEY}`,
+      ...options.headers,
+    },
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`GeminiGW ${res.status}: ${text.slice(0, 200)}`)
+  }
+  const ct = res.headers.get('content-type') || ''
+  if (ct.includes('json')) return res.json()
+  return res.text()
+}
+
+router.get('/gemini/pool-status', auth, async (_req, res) => {
+  try {
+    const data = await geminiGwFetch('/api/pool')
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/gemini/pool/add', auth, async (req, res) => {
+  try {
+    const data = await geminiGwFetch('/api/pool/add', { method: 'POST', body: JSON.stringify(req.body) })
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/gemini/pool/:label/disable', auth, async (req, res) => {
+  try {
+    await geminiGwFetch(`/api/pool/${req.params.label}/disable`, { method: 'POST' })
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/gemini/pool/:label/enable', auth, async (req, res) => {
+  try {
+    await geminiGwFetch(`/api/pool/${req.params.label}/enable`, { method: 'POST' })
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.delete('/gemini/pool/:label', auth, async (req, res) => {
+  try {
+    const r = await fetch(`${GEMINI_GW_URL}/api/pool/${req.params.label}`, {
+      method: 'DELETE', headers: { 'Authorization': `Bearer ${GEMINI_GW_KEY}` },
+    })
+    if (!r.ok) throw new Error(`GeminiGW ${r.status}`)
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/gemini/pool/:label/test', auth, async (req, res) => {
+  try {
+    const data = await geminiGwFetch(`/api/pool/${req.params.label}/test`, { method: 'POST' })
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/gemini/pool/:label/proxy', auth, async (req, res) => {
+  try {
+    const data = await geminiGwFetch(`/api/pool/${req.params.label}/proxy`, { method: 'POST', body: JSON.stringify(req.body) })
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/gemini/test', auth, async (_req, res) => {
+  try {
+    const data = await geminiGwFetch('/v1/models')
+    res.json({ status: 'Success', data: { ok: true, models: data?.data?.length || 0 } })
+  } catch (e: any) { res.json({ status: 'Fail', data: { ok: false, message: e.message } }) }
+})
+
+router.get('/gemini/logs', auth, async (req, res) => {
+  try {
+    const qs = new URLSearchParams()
+    for (const [k, v] of Object.entries(req.query)) { if (v) qs.set(k, String(v)) }
+    const data = await geminiGwFetch(`/api/logs?${qs}`)
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.get('/gemini/logs/stats', auth, async (_req, res) => {
+  try {
+    const data = await geminiGwFetch('/api/logs/stats')
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
 app.use('', router)
 app.use('/api', router)
 app.set('trust proxy', 1)

@@ -433,3 +433,37 @@ export function fetchVerify<T>(token: string) {
     data: { token },
   })
 }
+
+// ── Gemini Gateway Admin API ──
+export function fetchGeminiPoolStatus(): Promise<any> {
+  return apiGet('/gemini/pool-status')
+}
+export function addGeminiAccount(data: { secure_1psid: string; secure_1psidts?: string; label?: string; proxy?: string }): Promise<any> {
+  return apiPost('/gemini/pool/add', data)
+}
+export function disableGeminiAccount(label: string): Promise<void> {
+  return apiPost(`/gemini/pool/${label}/disable`)
+}
+export function enableGeminiAccount(label: string): Promise<void> {
+  return apiPost(`/gemini/pool/${label}/enable`)
+}
+export function deleteGeminiAccount(label: string): Promise<void> {
+  return apiDelete(`/gemini/pool/${label}`)
+}
+export function testGeminiAccount(label: string): Promise<any> {
+  return apiPost(`/gemini/pool/${label}/test`)
+}
+export function setGeminiProxy(label: string, proxy: string): Promise<any> {
+  return apiPost(`/gemini/pool/${label}/proxy`, { proxy })
+}
+export function testGeminiGateway(): Promise<any> {
+  return apiPost('/gemini/test')
+}
+export function fetchGeminiLogs(params: Record<string, any> = {}): Promise<any> {
+  const qs = new URLSearchParams()
+  for (const [k, v] of Object.entries(params)) { if (v !== undefined && v !== '') qs.set(k, String(v)) }
+  return apiGet(`/gemini/logs?${qs}`)
+}
+export function fetchGeminiLogStats(): Promise<any> {
+  return apiGet('/gemini/logs/stats')
+}

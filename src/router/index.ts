@@ -41,6 +41,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/admin/KiroPool.vue'),
       },
       {
+        path: 'gemini-pool',
+        name: 'AdminGeminiPool',
+        component: () => import('@/views/admin/GeminiPool.vue'),
+      },
+      {
         path: 'clewdr-logs',
         name: 'AdminClewdrLogs',
         component: () => import('@/views/admin/ClewdrLogs.vue'),
