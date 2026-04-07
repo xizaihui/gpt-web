@@ -247,6 +247,23 @@ export function fetchClewdrLogStats(params?: Record<string, any>): Promise<any> 
   return apiGet(`/clewdr/logs/stats${qs}`)
 }
 
+// ── Kiro Gateway Admin API ──
+export function fetchKiroPoolStatus(): Promise<any> {
+  return apiGet('/kiro/pool-status')
+}
+export function fetchKiroSessions(): Promise<any> {
+  return apiGet('/kiro/sessions')
+}
+export function disableKiroAccount(id: string): Promise<void> {
+  return apiPost(`/kiro/accounts/${id}/disable`)
+}
+export function enableKiroAccount(id: string): Promise<void> {
+  return apiPost(`/kiro/accounts/${id}/enable`)
+}
+export function testKiroGateway(): Promise<any> {
+  return apiPost('/kiro/test')
+}
+
 export function fetchChatAPI<T = any>(
   prompt: string,
   options?: { conversationId?: string; parentMessageId?: string },

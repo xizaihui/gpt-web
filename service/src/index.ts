@@ -643,7 +643,7 @@ router.get('/clewdr/logs', auth, async (req, res) => {
   try {
     const qs = new URLSearchParams(req.query as any).toString()
     const r = await clewdrFetch(`/api/logs?${qs}`, { method: 'GET' })
-    const data = await r.json()
+    const data = r
     res.json(data)
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
@@ -652,8 +652,67 @@ router.get('/clewdr/logs/stats', auth, async (req, res) => {
   try {
     const qs = new URLSearchParams(req.query as any).toString()
     const r = await clewdrFetch(`/api/logs/stats?${qs}`, { method: 'GET' })
-    const data = await r.json()
+    const data = r
     res.json(data)
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+// ── Kiro Gateway Admin API ──
+
+const KIRO_GW_URL = process.env.KIRO_GW_BASE_URL || 'http://43.165.172.3:8000'
+const KIRO_GW_KEY = process.env.KIRO_GW_API_KEY || ''
+
+async function kiroGwFetch(path: string, options: any = {}): Promise<any> {
+  const url = `${KIRO_GW_URL}${path}`
+  const res = await fetch(url, {
+    ...options,
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${KIRO_GW_KEY}`,
+      ...options.headers,
+    },
+  })
+  if (!res.ok) {
+    const text = await res.text()
+    throw new Error(`KiroGW ${res.status}: ${text.slice(0, 200)}`)
+  }
+  const ct = res.headers.get('content-type') || ''
+  if (ct.includes('json')) return res.json()
+  return res.text()
+}
+
+router.get('/kiro/pool-status', auth, async (_req, res) => {
+  try {
+    const data = await kiroGwFetch('/v1/pool/status')
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.get('/kiro/sessions', auth, async (_req, res) => {
+  try {
+    const data = await kiroGwFetch('/v1/pool/sessions')
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Success', data: [] }) }
+})
+
+router.post('/kiro/accounts/:id/disable', auth, async (req, res) => {
+  try {
+    await kiroGwFetch(`/v1/pool/accounts/${req.params.id}/disable`, { method: 'POST' })
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/kiro/accounts/:id/enable', auth, async (req, res) => {
+  try {
+    await kiroGwFetch(`/v1/pool/accounts/${req.params.id}/enable`, { method: 'POST' })
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/kiro/test', auth, async (_req, res) => {
+  try {
+    const data = await kiroGwFetch('/v1/models')
+    res.json({ status: 'Success', data: { ok: true, models: data?.data?.length || 0 } })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 

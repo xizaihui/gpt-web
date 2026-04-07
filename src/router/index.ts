@@ -36,6 +36,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import('@/views/admin/ClaudePool.vue'),
       },
       {
+        path: 'kiro-pool',
+        name: 'AdminKiroPool',
+        component: () => import('@/views/admin/KiroPool.vue'),
+      },
+      {
         path: 'clewdr-logs',
         name: 'AdminClewdrLogs',
         component: () => import('@/views/admin/ClewdrLogs.vue'),
