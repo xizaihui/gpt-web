@@ -14,6 +14,7 @@ const apiKey = ref(settingStore.apiKey)
 const showApiKey = ref(false)
 const clearing = ref(false)
 const clearSuccess = ref(false)
+const showConfirm = ref(false)
 
 const DEFAULT_URL = import.meta.env.VITE_DEFAULT_API_BASE_URL || ''
 
@@ -50,6 +51,7 @@ async function clearAllChats() {
   try {
     await chatStore.clearHistory()
     clearSuccess.value = true
+    showConfirm.value = false
     setTimeout(() => { clearSuccess.value = false }, 2000)
   } catch (e) {
     console.error('Failed to clear conversations:', e)
@@ -152,31 +154,60 @@ watch(hasApiConfig, () => {
             <section>
               <h3 class="section-title">数据管理</h3>
               <button
-                class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all"
-                :class="clearSuccess
-                  ? 'bg-[#dcfce7] text-[#16a34a] border border-[#bbf7d0]'
-                  : 'bg-[#fef2f2] text-[#dc2626] border border-[#fecaca] hover:bg-[#fee2e2]'"
-                :disabled="clearing"
-                @click="clearAllChats"
+                v-if="clearSuccess"
+                class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[13px] font-medium bg-[#dcfce7] text-[#16a34a] border border-[#bbf7d0]"
               >
-                <template v-if="clearing">
-                  <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
-                  <span>清理中...</span>
-                </template>
-                <template v-else-if="clearSuccess">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
-                  <span>已清理</span>
-                </template>
-                <template v-else>
-                  <Icon name="trash-2" :size="14" :stroke-width="1.8" />
-                  <span>清理所有聊天会话</span>
-                </template>
+                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                <span>已清理</span>
+              </button>
+              <button
+                v-else
+                class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[13px] font-medium bg-[#fef2f2] text-[#dc2626] border border-[#fecaca] hover:bg-[#fee2e2] transition-all"
+                @click="showConfirm = true"
+              >
+                <Icon name="trash-2" :size="14" :stroke-width="1.8" />
+                <span>清理所有聊天会话</span>
               </button>
               <p class="text-[11px] text-[#999] mt-1.5 text-center">删除所有对话记录，此操作不可恢复</p>
             </section>
           </div>
         </div>
       </div>
+
+      <!-- Confirm dialog -->
+      <Transition name="fade">
+        <div v-if="showConfirm" class="fixed inset-0 z-[300] flex items-center justify-center" @click.self="showConfirm = false">
+          <div class="absolute inset-0 bg-black/40" />
+          <div class="relative bg-white rounded-2xl shadow-2xl w-[340px] mx-4 overflow-hidden">
+            <!-- Icon -->
+            <div class="flex justify-center pt-6 pb-2">
+              <div class="w-12 h-12 rounded-full bg-[#fef2f2] flex items-center justify-center">
+                <Icon name="trash-2" :size="22" class="text-[#dc2626]" :stroke-width="1.8" />
+              </div>
+            </div>
+            <!-- Text -->
+            <div class="px-6 pb-5 text-center">
+              <h3 class="text-[16px] font-semibold text-[#0d0d0d] mb-1.5">确认清理所有会话？</h3>
+              <p class="text-[13px] text-[#666] leading-relaxed">所有聊天记录将被永久删除，此操作无法撤销。</p>
+            </div>
+            <!-- Buttons -->
+            <div class="flex border-t border-[#f0f0f0]">
+              <button
+                class="flex-1 py-3 text-[14px] font-medium text-[#666] hover:bg-[#f9f9f9] transition-colors border-r border-[#f0f0f0]"
+                @click="showConfirm = false"
+              >取消</button>
+              <button
+                class="flex-1 py-3 text-[14px] font-medium text-[#dc2626] hover:bg-[#fef2f2] transition-colors flex items-center justify-center gap-1.5"
+                :disabled="clearing"
+                @click="clearAllChats"
+              >
+                <svg v-if="clearing" class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                <span>{{ clearing ? '清理中...' : '确认清理' }}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      </Transition>
     </Teleport>
   </footer>
 </template>
@@ -186,6 +217,9 @@ watch(hasApiConfig, () => {
 .settings-input:focus { @apply border-[#999]; }
 .section-title { @apply text-xs font-semibold text-[#999] uppercase tracking-wider mb-3; }
 .field-label { @apply block text-[13px] font-medium text-[#0d0d0d] mb-1.5; }
+
+.fade-enter-active, .fade-leave-active { transition: opacity 0.15s ease; }
+.fade-enter-from, .fade-leave-to { opacity: 0; }
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;
