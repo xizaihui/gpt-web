@@ -263,6 +263,15 @@ export function enableKiroAccount(id: string): Promise<void> {
 export function testKiroGateway(): Promise<any> {
   return apiPost('/kiro/test')
 }
+export function uploadKiroAccount(filename: string, data: string, label?: string): Promise<any> {
+  return apiPost('/kiro/accounts/upload', { filename, data, label })
+}
+export function deleteKiroAccount(id: string): Promise<void> {
+  return apiDelete(`/kiro/accounts/${id}`)
+}
+export function testKiroAccount(id: string): Promise<any> {
+  return apiPost(`/kiro/accounts/${id}/test`)
+}
 
 export function fetchChatAPI<T = any>(
   prompt: string,

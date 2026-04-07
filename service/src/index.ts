@@ -716,6 +716,56 @@ router.post('/kiro/test', auth, async (_req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
+router.post('/kiro/accounts/upload', auth, async (req, res) => {
+  try {
+    const { filename, data: fileData, label } = req.body
+    if (!filename || !fileData) throw new Error('filename and data (base64) are required')
+    const buf = Buffer.from(fileData, 'base64')
+    // Build multipart form data manually
+    const boundary = '----KiroUpload' + Date.now()
+    const parts: Buffer[] = []
+    // file part
+    parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="file"; filename="${filename}"\r\nContent-Type: application/octet-stream\r\n\r\n`))
+    parts.push(buf)
+    parts.push(Buffer.from('\r\n'))
+    // label part
+    if (label) {
+      parts.push(Buffer.from(`--${boundary}\r\nContent-Disposition: form-data; name="label"\r\n\r\n${label}\r\n`))
+    }
+    parts.push(Buffer.from(`--${boundary}--\r\n`))
+    const body = Buffer.concat(parts)
+    const r = await fetch(`${KIRO_GW_URL}/v1/pool/accounts/upload`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${KIRO_GW_KEY}`,
+        'Content-Type': `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    })
+    if (!r.ok) throw new Error(`KiroGW ${r.status}: ${(await r.text()).slice(0, 200)}`)
+    const result = await r.json()
+    res.json({ status: 'Success', data: result })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.delete('/kiro/accounts/:id', auth, async (req, res) => {
+  try {
+    const r = await fetch(`${KIRO_GW_URL}/v1/pool/accounts/${req.params.id}`, {
+      method: 'DELETE',
+      headers: { 'Authorization': `Bearer ${KIRO_GW_KEY}` },
+    })
+    if (!r.ok) throw new Error(`KiroGW ${r.status}: ${(await r.text()).slice(0, 200)}`)
+    res.json({ status: 'Success' })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
+router.post('/kiro/accounts/:id/test', auth, async (req, res) => {
+  try {
+    const data = await kiroGwFetch(`/v1/pool/accounts/${req.params.id}/test`, { method: 'POST' })
+    res.json({ status: 'Success', data })
+  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+})
+
 // ─── Request Logs ──────────────────────────────────────────────────
 
 router.get('/log/list', auth, async (req, res) => {
