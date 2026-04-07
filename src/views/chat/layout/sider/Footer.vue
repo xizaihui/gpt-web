@@ -1,9 +1,10 @@
 <script setup lang='ts'>
-import { ref, watch, onMounted } from 'vue'
-import { useSettingStore } from '@/store'
+import { ref, watch } from 'vue'
+import { useSettingStore, useChatStore } from '@/store'
 import Icon from '@/components/common/Icon.vue'
 
 const settingStore = useSettingStore()
+const chatStore = useChatStore()
 const showPanel = ref(false)
 
 // Local state
@@ -11,22 +12,17 @@ const contextRounds = ref(settingStore.contextRounds)
 const apiBaseUrl = ref(settingStore.apiBaseUrl)
 const apiKey = ref(settingStore.apiKey)
 const showApiKey = ref(false)
+const clearing = ref(false)
+const clearSuccess = ref(false)
 
 const DEFAULT_URL = import.meta.env.VITE_DEFAULT_API_BASE_URL || ''
-
-// Pool stats
-const activeTab = ref<'api' | 'codex'>('api')
-
-const codexModels = [
-  { id: 'gpt-5.4', name: 'GPT-5.4' },
-  { id: 'gpt-5.4-mini', name: 'GPT-5.4 Mini' },
-]
 
 function openPanel() {
   contextRounds.value = settingStore.contextRounds
   apiBaseUrl.value = settingStore.apiBaseUrl || DEFAULT_URL
   apiKey.value = settingStore.apiKey || ''
   showApiKey.value = false
+  clearSuccess.value = false
   showPanel.value = true
 }
 
@@ -45,6 +41,21 @@ function saveApiConfig() {
     apiBaseUrl: apiBaseUrl.value,
     apiKey: apiKey.value,
   })
+}
+
+async function clearAllChats() {
+  if (clearing.value) return
+  clearing.value = true
+  clearSuccess.value = false
+  try {
+    await chatStore.clearHistory()
+    clearSuccess.value = true
+    setTimeout(() => { clearSuccess.value = false }, 2000)
+  } catch (e) {
+    console.error('Failed to clear conversations:', e)
+  } finally {
+    clearing.value = false
+  }
 }
 
 // Status
@@ -91,61 +102,31 @@ watch(hasApiConfig, () => {
             </button>
           </div>
 
-          <!-- Tabs -->
-          <div class="flex px-5 gap-1 mb-3 flex-shrink-0">
-            <button class="tab-btn" :class="activeTab === 'api' ? 'tab-active' : 'tab-inactive'" @click="activeTab = 'api'">
-              API 模式
-            </button>
-            <button class="tab-btn" :class="activeTab === 'codex' ? 'tab-active' : 'tab-inactive'" @click="activeTab = 'codex'">
-              订阅模式
-            </button>
-          </div>
-
-          <!-- Scrollable content — fixed height so tab switch doesn't jump -->
-          <div class="overflow-y-auto flex-1 px-5 pb-5" style="height: 320px;">
-            <!-- API Tab -->
-            <div v-if="activeTab === 'api'" class="space-y-4">
-              <section>
-                <h3 class="section-title">API 配置</h3>
-                <div class="mb-3">
-                  <label class="field-label">Base URL</label>
-                  <input v-model="apiBaseUrl" type="text" class="settings-input" placeholder="https://api.openai.com" @change="saveApiConfig">
-                  <p class="text-[11px] text-[#999] mt-1">/v1 可加可不加，系统会自动处理</p>
+          <!-- Scrollable content -->
+          <div class="overflow-y-auto flex-1 px-5 pb-5">
+            <!-- API Config -->
+            <section class="mb-4">
+              <h3 class="section-title">API 配置</h3>
+              <div class="mb-3">
+                <label class="field-label">Base URL</label>
+                <input v-model="apiBaseUrl" type="text" class="settings-input" placeholder="https://api.openai.com" @change="saveApiConfig">
+                <p class="text-[11px] text-[#999] mt-1">/v1 可加可不加，系统会自动处理</p>
+              </div>
+              <div>
+                <label class="field-label">API Key</label>
+                <div class="relative">
+                  <input v-model="apiKey" :type="showApiKey ? 'text' : 'password'" class="settings-input pr-9" placeholder="sk-..." @change="saveApiConfig">
+                  <button class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] hover:text-[#666] transition-colors" @click="showApiKey = !showApiKey">
+                    <Icon :name="showApiKey ? 'eye-off' : 'eye'" :size="15" />
+                  </button>
                 </div>
-                <div>
-                  <label class="field-label">API Key</label>
-                  <div class="relative">
-                    <input v-model="apiKey" :type="showApiKey ? 'text' : 'password'" class="settings-input pr-9" placeholder="sk-..." @change="saveApiConfig">
-                    <button class="absolute right-2.5 top-1/2 -translate-y-1/2 text-[#999] hover:text-[#666] transition-colors" @click="showApiKey = !showApiKey">
-                      <Icon :name="showApiKey ? 'eye-off' : 'eye'" :size="15" />
-                    </button>
-                  </div>
-                </div>
-              </section>
-            </div>
+              </div>
+            </section>
 
-            <!-- Codex Tab -->
-            <div v-if="activeTab === 'codex'" class="space-y-4">
-              <section>
-                <h3 class="section-title">ChatGPT 官方订阅号</h3>
-                <p class="text-[12px] text-[#666] mb-3 leading-relaxed">
-                  体验 ChatGPT Plus/Pro 订阅额度调用 GPT-5.4，不消耗 API 余额。官方原版订阅号，不降智。
-                </p>
-                <label class="field-label">可用模型</label>
-                <div class="space-y-1">
-                  <div v-for="m in codexModels" :key="m.id" class="flex items-center gap-2 px-3 py-2 bg-[#f4f4f4] rounded-xl">
-                    <span class="w-1.5 h-1.5 rounded-full bg-[#19c37d] flex-shrink-0" />
-                    <span class="text-[13px] text-[#0d0d0d]">{{ m.name }}</span>
-                  </div>
-                </div>
-              </section>
-            </div>
-
-            <!-- Separator -->
             <div class="border-t border-[#f0f0f0] my-4" />
 
-            <!-- Context rounds (always visible) -->
-            <section>
+            <!-- Context rounds -->
+            <section class="mb-4">
               <h3 class="section-title">对话设置</h3>
               <div>
                 <div class="flex items-center justify-between mb-2">
@@ -164,6 +145,35 @@ watch(hasApiConfig, () => {
                 </div>
               </div>
             </section>
+
+            <div class="border-t border-[#f0f0f0] my-4" />
+
+            <!-- Clear all chats -->
+            <section>
+              <h3 class="section-title">数据管理</h3>
+              <button
+                class="w-full flex items-center justify-center gap-2 px-3 py-2.5 rounded-xl text-[13px] font-medium transition-all"
+                :class="clearSuccess
+                  ? 'bg-[#dcfce7] text-[#16a34a] border border-[#bbf7d0]'
+                  : 'bg-[#fef2f2] text-[#dc2626] border border-[#fecaca] hover:bg-[#fee2e2]'"
+                :disabled="clearing"
+                @click="clearAllChats"
+              >
+                <template v-if="clearing">
+                  <svg class="animate-spin" xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><path d="M21 12a9 9 0 1 1-6.219-8.56" /></svg>
+                  <span>清理中...</span>
+                </template>
+                <template v-else-if="clearSuccess">
+                  <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12" /></svg>
+                  <span>已清理</span>
+                </template>
+                <template v-else>
+                  <Icon name="trash-2" :size="14" :stroke-width="1.8" />
+                  <span>清理所有聊天会话</span>
+                </template>
+              </button>
+              <p class="text-[11px] text-[#999] mt-1.5 text-center">删除所有对话记录，此操作不可恢复</p>
+            </section>
           </div>
         </div>
       </div>
@@ -176,9 +186,6 @@ watch(hasApiConfig, () => {
 .settings-input:focus { @apply border-[#999]; }
 .section-title { @apply text-xs font-semibold text-[#999] uppercase tracking-wider mb-3; }
 .field-label { @apply block text-[13px] font-medium text-[#0d0d0d] mb-1.5; }
-.tab-btn { @apply flex items-center px-3 py-1.5 text-[13px] font-medium rounded-lg transition-colors; }
-.tab-active { @apply bg-[#0d0d0d] text-white; }
-.tab-inactive { @apply text-[#666] hover:bg-[#f4f4f4]; }
 
 input[type="range"]::-webkit-slider-thumb {
   -webkit-appearance: none; appearance: none;

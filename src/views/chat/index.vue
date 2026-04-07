@@ -416,7 +416,7 @@ async function onConversation() {
 
   // Reset textarea height
   if (inputRef.value) {
-    inputRef.value.style.height = '24px'
+    inputRef.value.style.height = '32px'
   }
 
   let options: Chat.ConversationRequest = {}
@@ -538,13 +538,19 @@ function handleStop() {
 // Auto-resize textarea
 function autoResize(event: Event) {
   const el = event.target as HTMLTextAreaElement
-  el.style.height = '24px'
+  el.style.height = '32px'
   el.style.height = `${Math.min(el.scrollHeight, 200)}px`
 }
 
 const buttonDisabled = computed(() => {
   return loading.value || (!prompt.value || prompt.value.trim() === '') && attachedFiles.value.length === 0
 })
+
+// Default model
+const defaultModel = 'codex:gpt-5.4'
+if (!savedModel) {
+  selectedModel.value = defaultModel
+}
 
 // Suggestion items
 const suggestions = [
@@ -644,14 +650,14 @@ onUnmounted(() => {
                   </div>
                 </div>
                 <!-- Textarea -->
-                <div class="px-4 pt-3 pb-1">
+                <div class="px-4 pt-4 pb-2">
                   <textarea
                     ref="inputRef"
                     v-model="prompt"
-                    class="w-full bg-transparent resize-none outline-none text-[16px] text-[#0d0d0d] placeholder-[#999] leading-[1.5] max-h-[200px] min-h-[24px]"
+                    class="w-full bg-transparent resize-none outline-none text-[16px] text-[#0d0d0d] placeholder-[#999] leading-[1.5] max-h-[200px] min-h-[32px]"
                     placeholder="有问题，尽管问"
                     rows="1"
-                    style="height: 24px;"
+                    style="height: 32px;"
                     @input="autoResize"
                     @keydown="handleEnter"
                   />
@@ -803,14 +809,14 @@ onUnmounted(() => {
           </div>
 
           <!-- Textarea -->
-          <div class="px-4 pt-3 pb-1">
+          <div class="px-4 pt-4 pb-2">
             <textarea
               ref="inputRef"
               v-model="prompt"
-              class="w-full bg-transparent resize-none outline-none text-[16px] text-[#0d0d0d] placeholder-[#999] leading-[1.5] max-h-[200px] min-h-[24px]"
+              class="w-full bg-transparent resize-none outline-none text-[16px] text-[#0d0d0d] placeholder-[#999] leading-[1.5] max-h-[200px] min-h-[32px]"
               placeholder="有问题，尽管问"
               rows="1"
-              style="height: 24px;"
+              style="height: 32px;"
               @input="autoResize"
               @keydown="handleEnter"
             />
