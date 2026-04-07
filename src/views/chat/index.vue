@@ -1,5 +1,5 @@
 <script setup lang='ts'>
-import { computed, onMounted, onUnmounted, ref } from 'vue'
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useRoute } from 'vue-router'
 import { useDialog, useMessage } from 'naive-ui'
 import { Message } from './components'
@@ -56,6 +56,23 @@ const showAttachMenu = ref(false)
 
 // Thinking / Reasoning toggle
 const thinkingEnabled = ref(false)
+
+// Thinking is only available for subscription GPT-5.4 models
+const thinkingSupported = computed(() => {
+  return selectedModel.value === 'codex:gpt-5.4' || selectedModel.value === 'codex:gpt-5.4-mini'
+})
+
+// Auto-disable thinking when switching to unsupported model
+watch(selectedModel, () => {
+  if (!thinkingSupported.value && thinkingEnabled.value) {
+    thinkingEnabled.value = false
+  }
+})
+
+function toggleThinking() {
+  if (!thinkingSupported.value) return
+  thinkingEnabled.value = !thinkingEnabled.value
+}
 const showRecentSubmenu = ref(false)
 
 const MAX_FILE_SIZE = 20 * 1024 * 1024 // 20MB
@@ -706,8 +723,13 @@ onUnmounted(() => {
                     <!-- 思考 -->
                     <button
                       class="flex items-center gap-1.5 px-2.5 py-1 text-[13px] rounded-full transition-all font-medium"
-                      :class="thinkingEnabled ? 'text-[#0066ff] bg-blue-50 ring-1 ring-blue-200' : 'text-[#b4b4b4] hover:text-[#666] hover:bg-[#f4f4f4]'"
-                      @click="thinkingEnabled = !thinkingEnabled"
+                      :class="thinkingEnabled
+                        ? 'text-[#0066ff] bg-blue-50 ring-1 ring-blue-200'
+                        : thinkingSupported
+                          ? 'text-[#b4b4b4] hover:text-[#666] hover:bg-[#f4f4f4]'
+                          : 'text-[#d4d4d4] cursor-not-allowed'"
+                      :disabled="!thinkingSupported"
+                      @click="toggleThinking"
                     >
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a8 8 0 0 0-8 8c0 3.4 2.1 6.3 5 7.4V20a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2.6c2.9-1.1 5-4 5-7.4a8 8 0 0 0-8-8z" /><line x1="9" y1="23" x2="15" y2="23" /></svg>
                       <span>思考</span>
@@ -741,7 +763,7 @@ onUnmounted(() => {
             </div>
 
             <p class="text-center text-[11px] text-[#ccc] mt-2 leading-normal">
-              ChatGPT 可能会犯错。请核查重要信息。
+              AI 可能会犯错。请核查重要信息。
             </p>
           </div>
           <div class="flex-1" />
@@ -895,8 +917,11 @@ onUnmounted(() => {
                 class="flex items-center gap-1.5 px-2.5 py-1 text-[13px] rounded-full transition-all font-medium"
                 :class="thinkingEnabled
                   ? 'text-[#0066ff] bg-blue-50 ring-1 ring-blue-200'
-                  : 'text-[#b4b4b4] hover:text-[#666] hover:bg-[#f4f4f4]'"
-                @click="thinkingEnabled = !thinkingEnabled"
+                  : thinkingSupported
+                    ? 'text-[#b4b4b4] hover:text-[#666] hover:bg-[#f4f4f4]'
+                    : 'text-[#d4d4d4] cursor-not-allowed'"
+                :disabled="!thinkingSupported"
+                @click="toggleThinking"
               >
                 <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                   <path d="M12 2a8 8 0 0 0-8 8c0 3.4 2.1 6.3 5 7.4V20a1 1 0 0 0 1 1h4a1 1 0 0 0 1-1v-2.6c2.9-1.1 5-4 5-7.4a8 8 0 0 0-8-8z" />
@@ -940,7 +965,7 @@ onUnmounted(() => {
 
         <!-- Disclaimer -->
         <p class="text-center text-[11px] text-[#ccc] mt-2 leading-normal">
-          ChatGPT 可能会犯错。请核查重要信息。
+          AI 可能会犯错。请核查重要信息。
         </p>
       </div>
     </footer>
