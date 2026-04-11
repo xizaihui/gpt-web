@@ -1,0 +1,320 @@
+<script setup lang="ts">
+import { ref, computed, onMounted } from 'vue'
+import { fetchClewdrCookies, deleteClewdrCookie, disableClewdrCookie, enableClewdrCookie } from '@/api'
+import Icon from '@/components/common/Icon.vue'
+import QuotaProgressBar from './components/QuotaProgressBar.vue'
+import ResetCountdown from './components/ResetCountdown.vue'
+import AccountDetailDrawer from './components/AccountDetailDrawer.vue'
+import BatchAddDialog from './components/BatchAddDialog.vue'
+
+type Provider = 'claude' | 'codex' | 'gemini' | 'kiro'
+
+const tab = ref<Provider>('claude')
+const tabs: { key: Provider; label: string; ready: boolean }[] = [
+  { key: 'claude', label: 'Claude', ready: true },
+  { key: 'codex', label: 'Codex', ready: false },
+  { key: 'gemini', label: 'Gemini', ready: false },
+  { key: 'kiro', label: 'Kiro', ready: false },
+]
+
+const cookieData = ref<any>({ valid: [], exhausted: [], invalid: [] })
+const loading = ref(false)
+const search = ref('')
+const statusFilter = ref<'all' | 'valid' | 'exhausted' | 'invalid'>('all')
+const selected = ref<Set<string>>(new Set())
+
+const showBatchAdd = ref(false)
+const showDrawer = ref(false)
+const currentAccount = ref<any>(null)
+
+async function load() {
+  loading.value = true
+  try { cookieData.value = await fetchClewdrCookies() }
+  catch (e) { console.error(e) }
+  loading.value = false
+  selected.value = new Set()
+}
+onMounted(load)
+
+const allRows = computed(() => {
+  const v = (cookieData.value.valid || []).map((c: any) => ({ ...c, _status: 'valid' }))
+  const e = (cookieData.value.exhausted || []).map((c: any) => ({ ...c, _status: 'exhausted' }))
+  const i = (cookieData.value.invalid || []).map((c: any) => ({ ...c, _status: 'invalid' }))
+  return [...v, ...e, ...i]
+})
+
+const filtered = computed(() => {
+  const q = search.value.trim().toLowerCase()
+  return allRows.value.filter((r: any) => {
+    if (statusFilter.value !== 'all' && r._status !== statusFilter.value) return false
+    if (!q) return true
+    const key = `${r.cookie || ''} ${r.label || ''}`.toLowerCase()
+    return key.includes(q)
+  })
+})
+
+const stats = computed(() => ({
+  total: allRows.value.length,
+  valid: (cookieData.value.valid || []).length,
+  exhausted: (cookieData.value.exhausted || []).length,
+  invalid: (cookieData.value.invalid || []).length,
+}))
+
+function mask(s: string) {
+  if (!s) return '—'
+  if (s.length <= 16) return s
+  return `${s.slice(0, 12)}…${s.slice(-6)}`
+}
+
+function rowKey(r: any) { return r.cookie || r.id || r.label || Math.random().toString() }
+
+function toggleSelect(r: any) {
+  const k = rowKey(r)
+  if (selected.value.has(k)) selected.value.delete(k)
+  else selected.value.add(k)
+  selected.value = new Set(selected.value)
+}
+function toggleSelectAll() {
+  if (selected.value.size === filtered.value.length) {
+    selected.value = new Set()
+  } else {
+    selected.value = new Set(filtered.value.map(rowKey))
+  }
+}
+
+function openDetail(r: any) {
+  currentAccount.value = r
+  showDrawer.value = true
+}
+
+async function handleDelete(r: any) {
+  if (!confirm(`确定删除账号 ${mask(r.cookie)} ?`)) return
+  try {
+    await deleteClewdrCookie(r.cookie)
+    await load()
+  } catch (e: any) { alert(e?.message || '删除失败') }
+}
+
+async function handleToggle(r: any) {
+  try {
+    if (r._status === 'valid') await disableClewdrCookie(r.cookie)
+    else await enableClewdrCookie(r.cookie)
+    await load()
+  } catch (e: any) { alert(e?.message || '操作失败') }
+}
+
+async function batchDelete() {
+  if (selected.value.size === 0) return
+  if (!confirm(`确定批量删除 ${selected.value.size} 个账号?`)) return
+  const targets = filtered.value.filter(r => selected.value.has(rowKey(r)))
+  for (const r of targets) {
+    try { await deleteClewdrCookie(r.cookie) } catch {}
+  }
+  await load()
+}
+
+function statusTag(s: string) {
+  if (s === 'valid') return { text: '正常', cls: 'bg-[#f0fdf4] text-[#16a34a] border-[#bbf7d0]' }
+  if (s === 'exhausted') return { text: '耗尽', cls: 'bg-[#fffbeb] text-[#d97706] border-[#fde68a]' }
+  return { text: '失效', cls: 'bg-[#fef2f2] text-[#dc2626] border-[#fecaca]' }
+}
+</script>
+
+<template>
+  <div class="p-6">
+    <!-- Provider tabs -->
+    <div class="flex items-center gap-1 border-b border-[#e5e7eb] mb-5">
+      <button
+        v-for="t in tabs"
+        :key="t.key"
+        class="relative px-4 py-2.5 text-sm font-medium border-b-2 transition-colors -mb-px"
+        :class="tab === t.key
+          ? 'border-[#18181b] text-[#18181b]'
+          : 'border-transparent text-[#71717a] hover:text-[#18181b]'"
+        @click="tab = t.key"
+      >
+        {{ t.label }}
+        <span
+          v-if="!t.ready"
+          class="ml-1.5 inline-flex items-center px-1 py-0.5 rounded text-[9px] bg-[#f4f4f5] text-[#a1a1aa] font-normal"
+        >WIP</span>
+      </button>
+    </div>
+
+    <!-- Claude tab -->
+    <div v-if="tab === 'claude'" class="space-y-4">
+      <!-- Summary strip -->
+      <div class="grid grid-cols-4 gap-3">
+        <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
+          <div class="text-[11px] text-[#71717a]">总计</div>
+          <div class="text-lg font-semibold text-[#18181b] tabular-nums">{{ stats.total }}</div>
+        </div>
+        <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
+          <div class="text-[11px] text-[#71717a]">正常</div>
+          <div class="text-lg font-semibold text-[#16a34a] tabular-nums">{{ stats.valid }}</div>
+        </div>
+        <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
+          <div class="text-[11px] text-[#71717a]">耗尽</div>
+          <div class="text-lg font-semibold text-[#d97706] tabular-nums">{{ stats.exhausted }}</div>
+        </div>
+        <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
+          <div class="text-[11px] text-[#71717a]">失效</div>
+          <div class="text-lg font-semibold text-[#dc2626] tabular-nums">{{ stats.invalid }}</div>
+        </div>
+      </div>
+
+      <!-- Toolbar -->
+      <div class="rounded-xl border border-[#e5e7eb] bg-white">
+        <div class="flex items-center gap-2 px-4 py-3 border-b border-[#e5e7eb]">
+          <div class="relative flex-1 max-w-xs">
+            <Icon name="search" :size="14" class="absolute left-2.5 top-1/2 -translate-y-1/2 text-[#a1a1aa]" />
+            <input
+              v-model="search"
+              type="text"
+              placeholder="搜索 Cookie / 标签..."
+              class="w-full pl-8 pr-3 py-1.5 text-xs rounded-md border border-[#e5e7eb] focus:outline-none focus:border-[#18181b]"
+            >
+          </div>
+          <select
+            v-model="statusFilter"
+            class="px-2.5 py-1.5 text-xs rounded-md border border-[#e5e7eb] bg-white text-[#18181b] focus:outline-none focus:border-[#18181b]"
+          >
+            <option value="all">全部状态</option>
+            <option value="valid">正常</option>
+            <option value="exhausted">耗尽</option>
+            <option value="invalid">失效</option>
+          </select>
+          <div class="flex-1" />
+          <button
+            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-[#e5e7eb] text-[#71717a] hover:text-[#18181b] hover:bg-[#fafafa]"
+            @click="load"
+          >
+            <Icon name="refresh-cw" :size="12" />
+            刷新
+          </button>
+          <button
+            class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-[#e5e7eb] text-[#71717a] hover:text-[#18181b] hover:bg-[#fafafa]"
+            @click="showBatchAdd = true"
+          >
+            <Icon name="upload" :size="12" />
+            批量添加
+          </button>
+          <button
+            class="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md bg-[#18181b] text-white hover:bg-[#27272a]"
+            @click="showBatchAdd = true"
+          >
+            <Icon name="plus" :size="12" />
+            添加
+          </button>
+        </div>
+
+        <!-- Batch bar -->
+        <div v-if="selected.size > 0" class="flex items-center gap-2 px-4 py-2 bg-[#eef2ff] border-b border-[#c7d2fe]">
+          <span class="text-xs text-[#6366f1] font-medium">已选择 {{ selected.size }} 项</span>
+          <div class="flex-1" />
+          <button class="text-xs px-2 py-1 rounded text-[#71717a] hover:text-[#18181b] hover:bg-white">批量设代理</button>
+          <button class="text-xs px-2 py-1 rounded text-[#71717a] hover:text-[#18181b] hover:bg-white">批量禁用</button>
+          <button class="text-xs px-2 py-1 rounded text-[#dc2626] hover:bg-white" @click="batchDelete">批量删除</button>
+        </div>
+
+        <!-- Table -->
+        <div class="overflow-x-auto">
+          <table class="w-full text-xs">
+            <thead class="bg-[#fafafa] text-[#71717a]">
+              <tr>
+                <th class="px-3 py-2.5 font-medium text-left w-8">
+                  <input
+                    type="checkbox"
+                    :checked="selected.size > 0 && selected.size === filtered.length"
+                    class="rounded border-[#d4d4d8]"
+                    @change="toggleSelectAll"
+                  >
+                </th>
+                <th class="px-3 py-2.5 font-medium text-left">Cookie</th>
+                <th class="px-3 py-2.5 font-medium text-left w-20">状态</th>
+                <th class="px-3 py-2.5 font-medium text-left w-48">Session 额度</th>
+                <th class="px-3 py-2.5 font-medium text-left w-48">7 日额度</th>
+                <th class="px-3 py-2.5 font-medium text-left w-32">重置倒计时</th>
+                <th class="px-3 py-2.5 font-medium text-left w-32">代理</th>
+                <th class="px-3 py-2.5 font-medium text-right w-40">操作</th>
+              </tr>
+            </thead>
+            <tbody>
+              <tr v-if="loading">
+                <td colspan="8" class="px-3 py-8 text-center text-[#a1a1aa]">加载中...</td>
+              </tr>
+              <tr v-else-if="filtered.length === 0">
+                <td colspan="8" class="px-3 py-8 text-center text-[#a1a1aa]">暂无数据</td>
+              </tr>
+              <tr
+                v-for="r in filtered"
+                :key="rowKey(r)"
+                class="border-t border-[#f4f4f5] hover:bg-[#fafafa] cursor-pointer"
+                @click="openDetail(r)"
+              >
+                <td class="px-3 py-2.5" @click.stop>
+                  <input
+                    type="checkbox"
+                    :checked="selected.has(rowKey(r))"
+                    class="rounded border-[#d4d4d8]"
+                    @change="toggleSelect(r)"
+                  >
+                </td>
+                <td class="px-3 py-2.5 font-mono text-[#18181b]">{{ mask(r.cookie) }}</td>
+                <td class="px-3 py-2.5">
+                  <span
+                    class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border"
+                    :class="statusTag(r._status).cls"
+                  >{{ statusTag(r._status).text }}</span>
+                </td>
+                <td class="px-3 py-2.5">
+                  <QuotaProgressBar :value="r.session_utilization || 0" />
+                </td>
+                <td class="px-3 py-2.5">
+                  <QuotaProgressBar :value="r.seven_day_utilization || 0" />
+                </td>
+                <td class="px-3 py-2.5">
+                  <ResetCountdown :reset-at="r.reset_at" />
+                </td>
+                <td class="px-3 py-2.5 text-[#71717a] font-mono text-[10px] truncate max-w-[120px]">
+                  {{ r.proxy || '—' }}
+                </td>
+                <td class="px-3 py-2.5 text-right" @click.stop>
+                  <div class="inline-flex items-center gap-1">
+                    <button
+                      class="p-1 rounded hover:bg-[#f4f4f5] text-[#71717a] hover:text-[#18181b]"
+                      title="详情"
+                      @click="openDetail(r)"
+                    ><Icon name="info" :size="12" /></button>
+                    <button
+                      class="p-1 rounded hover:bg-[#f4f4f5] text-[#71717a] hover:text-[#18181b]"
+                      :title="r._status === 'valid' ? '禁用' : '启用'"
+                      @click="handleToggle(r)"
+                    ><Icon :name="r._status === 'valid' ? 'pause' : 'play'" :size="12" /></button>
+                    <button
+                      class="p-1 rounded hover:bg-[#fef2f2] text-[#71717a] hover:text-[#dc2626]"
+                      title="删除"
+                      @click="handleDelete(r)"
+                    ><Icon name="trash" :size="12" /></button>
+                  </div>
+                </td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+
+    <!-- WIP tabs -->
+    <div v-else class="rounded-xl border border-dashed border-[#e5e7eb] bg-white p-12 flex flex-col items-center justify-center text-center">
+      <div class="w-12 h-12 rounded-xl bg-[#f4f4f5] flex items-center justify-center mb-3">
+        <Icon name="clock" :size="20" class="text-[#a1a1aa]" />
+      </div>
+      <div class="text-sm font-medium text-[#18181b]">{{ tabs.find(t => t.key === tab)?.label }} 账号池</div>
+      <div class="mt-1 text-xs text-[#71717a]">开发中 · 将在阶段 2/3 后端就绪后接入</div>
+    </div>
+
+    <AccountDetailDrawer v-model:show="showDrawer" :account="currentAccount" />
+    <BatchAddDialog v-model:show="showBatchAdd" @done="load" />
+  </div>
+</template>

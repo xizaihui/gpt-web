@@ -64,6 +64,40 @@ const routes: RouteRecordRaw[] = [
   },
 
   {
+    path: '/admin-v2',
+    name: 'AdminV2',
+    component: () => import('@/views/admin-v2/Layout.vue'),
+    redirect: '/admin-v2/dashboard',
+    children: [
+      {
+        path: 'dashboard',
+        name: 'AdminV2Dashboard',
+        component: () => import('@/views/admin-v2/Dashboard.vue'),
+      },
+      {
+        path: 'pool',
+        name: 'AdminV2Pool',
+        component: () => import('@/views/admin-v2/AccountPool.vue'),
+      },
+      {
+        path: 'proxies',
+        name: 'AdminV2Proxies',
+        component: () => import('@/views/admin-v2/ProxyManager.vue'),
+      },
+      {
+        path: 'logs',
+        name: 'AdminV2Logs',
+        component: () => import('@/views/admin-v2/AuditLogs.vue'),
+      },
+      {
+        path: 'settings',
+        name: 'AdminV2Settings',
+        component: () => import('@/views/admin-v2/Settings.vue'),
+      },
+    ],
+  },
+
+  {
     path: '/404',
     name: '404',
     component: () => import('@/views/exception/404/index.vue'),
