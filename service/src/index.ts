@@ -490,21 +490,31 @@ const CLEWDR_ADMIN_PW = process.env.CLEWDR_ADMIN_KEY || ''
 
 async function clewdrFetch(path: string, options: any = {}): Promise<any> {
   const url = `${CLEWDR_ADMIN_URL}${path}`
-  const res = await fetch(url, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${CLEWDR_ADMIN_PW}`,
-      ...options.headers,
-    },
-  })
-  if (!res.ok) {
-    const text = await res.text()
-    throw new Error(`ClewdR ${res.status}: ${text.slice(0, 200)}`)
+  const controller = new AbortController()
+  const timeout = setTimeout(() => controller.abort(), 30000)
+  try {
+    const res = await fetch(url, {
+      ...options,
+      signal: controller.signal,
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': `Bearer ${CLEWDR_ADMIN_PW}`,
+        ...options.headers,
+      },
+    })
+    clearTimeout(timeout)
+    if (!res.ok) {
+      const text = await res.text()
+      throw new Error(`ClewdR ${res.status}: ${text.slice(0, 200)}`)
+    }
+    const contentType = res.headers.get('content-type') || ''
+    if (contentType.includes('json')) return res.json()
+    return res.text()
+  } catch (e: any) {
+    clearTimeout(timeout)
+    if (e.name === 'AbortError') throw new Error('ClewdR 请求超时 (30s)')
+    throw e
   }
-  const contentType = res.headers.get('content-type') || ''
-  if (contentType.includes('json')) return res.json()
-  return res.text()
 }
 
 // Get all cookies (accounts)
@@ -520,14 +530,63 @@ router.post('/clewdr/cookies', auth, async (req, res) => {
   try {
     const { cookie, proxy } = req.body
     if (!cookie) throw new Error('cookie is required')
-    const body: any = { cookie }
-    if (proxy) body.proxy = proxy
-    await clewdrFetch('/api/cookie', {
+    // 格式校验
+    const trimmed = cookie.trim()
+    if (!trimmed.startsWith('sk-ant-sid')) {
+      throw new Error('Cookie 格式错误：必须以 sk-ant-sid 开头')
+    }
+    if (trimmed.length < 50) {
+      throw new Error('Cookie 格式错误：长度不足')
+    }
+    const body: any = { cookie: trimmed }
+    if (proxy) body.proxy = proxy.trim()
+    const result = await clewdrFetch('/api/cookie', {
       method: 'POST',
       body: JSON.stringify(body),
     })
-    res.json({ status: 'Success' })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
+    res.json({ status: 'Success', data: result })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message || '添加 Cookie 失败' })
+  }
+})
+
+// 批量添加 cookies
+router.post('/clewdr/cookies/batch', auth, async (req, res) => {
+  try {
+    const { cookies, proxy } = req.body
+    if (!Array.isArray(cookies) || cookies.length === 0) {
+      throw new Error('cookies 数组不能为空')
+    }
+    if (cookies.length > 100) {
+      throw new Error('单次最多添加 100 个 cookie')
+    }
+    const results: { cookie: string; success: boolean; error?: string }[] = []
+    // 限制 5 并发
+    const concurrency = 5
+    for (let i = 0; i < cookies.length; i += concurrency) {
+      const batch = cookies.slice(i, i + concurrency)
+      const promises = batch.map(async (c: string) => {
+        const trimmed = c.trim()
+        if (!trimmed) return { cookie: '(empty)', success: false, error: '空字符串' }
+        if (!trimmed.startsWith('sk-ant-sid')) {
+          return { cookie: trimmed.slice(0, 20) + '...', success: false, error: '格式错误' }
+        }
+        try {
+          const body: any = { cookie: trimmed }
+          if (proxy) body.proxy = proxy.trim()
+          await clewdrFetch('/api/cookie', { method: 'POST', body: JSON.stringify(body) })
+          return { cookie: trimmed.slice(0, 20) + '...', success: true }
+        } catch (e: any) {
+          return { cookie: trimmed.slice(0, 20) + '...', success: false, error: e.message }
+        }
+      })
+      results.push(...await Promise.all(promises))
+    }
+    const successCount = results.filter(r => r.success).length
+    res.json({ status: 'Success', data: { total: results.length, success: successCount, failed: results.length - successCount, results } })
+  } catch (e: any) {
+    res.json({ status: 'Fail', message: e.message })
+  }
 })
 
 // Delete a cookie (account) — ClewdR uses /api/cookie (singular) for DELETE

@@ -206,6 +206,9 @@ export function fetchClewdrCookies(): Promise<any> {
 export function addClewdrCookie(cookie: string, proxy?: string): Promise<void> {
   return apiPost('/clewdr/cookies', { cookie, proxy })
 }
+export function addClewdrCookieBatch(cookies: string[], proxy?: string): Promise<any> {
+  return apiPost('/clewdr/cookies/batch', { cookies, proxy })
+}
 export function deleteClewdrCookie(cookie: string): Promise<void> {
   return apiDelete('/clewdr/cookies', { cookie })
 }

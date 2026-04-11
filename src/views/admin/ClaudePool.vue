@@ -1,6 +1,11 @@
 <script setup lang="ts">
 import { ref, computed, onMounted } from 'vue'
-import { fetchClewdrCookies, addClewdrCookie, deleteClewdrCookie, testClewdr, disableClewdrCookie, enableClewdrCookie, fetchDisabledClewdrCookies } from '@/api'
+import { fetchClewdrCookies, addClewdrCookie, addClewdrCookieBatch, deleteClewdrCookie, testClewdr, disableClewdrCookie, enableClewdrCookie, fetchDisabledClewdrCookies } from '@/api'
+
+function isValidClaudeCookie(cookie: string): boolean {
+  const trimmed = cookie.trim()
+  return trimmed.startsWith('sk-ant-sid') && trimmed.length >= 50
+}
 
 const cookieData = ref<any>({ valid: [], exhausted: [], invalid: [] })
 const disabledCookies = ref<any[]>([])
@@ -49,16 +54,61 @@ async function loadData() {
 onMounted(loadData)
 
 async function handleAdd() {
-  const cookie = cookieInput.value.trim()
-  if (!cookie) return
+  const raw = cookieInput.value.trim()
+  if (!raw) return
+
+  // 检测是否是批量（多行）
+  const lines = raw.split('\n').map(l => l.trim()).filter(l => l.length > 0)
+
+  if (lines.length > 1) {
+    await handleBatchAdd(lines)
+    return
+  }
+
+  // 单条添加 - 前端格式校验
+  if (!isValidClaudeCookie(raw)) {
+    alert('Cookie 格式错误：必须以 sk-ant-sid 开头且长度不少于 50 字符')
+    return
+  }
+
   addLoading.value = true
   try {
-    await addClewdrCookie(cookie, proxyInput.value.trim() || undefined)
+    await addClewdrCookie(raw, proxyInput.value.trim() || undefined)
+    cookieInput.value = ''
+    proxyInput.value = ''
+    showAddDialog.value = false
+    alert('添加成功！')
+    await loadData()
+  } catch (e: any) {
+    alert('添加失败：' + (e.message || '未知错误'))
+  }
+  addLoading.value = false
+}
+
+async function handleBatchAdd(lines: string[]) {
+  // 前端预校验
+  const invalid = lines.filter(l => !isValidClaudeCookie(l))
+  const valid = lines.filter(l => isValidClaudeCookie(l))
+
+  if (invalid.length > 0 && valid.length > 0) {
+    if (!confirm(`${invalid.length} 条格式不正确将被跳过，继续添加 ${valid.length} 条？`)) return
+  }
+  if (valid.length === 0) {
+    alert('没有有效的 Cookie（需以 sk-ant-sid 开头，长度≥50）')
+    return
+  }
+
+  addLoading.value = true
+  try {
+    const result = await addClewdrCookieBatch(valid, proxyInput.value.trim() || undefined)
+    alert(`批量添加完成：${result.success} 成功，${result.failed} 失败`)
     cookieInput.value = ''
     proxyInput.value = ''
     showAddDialog.value = false
     await loadData()
-  } catch (e: any) { alert(e.message || '添加失败') }
+  } catch (e: any) {
+    alert('批量添加失败：' + (e.message || '未知错误'))
+  }
   addLoading.value = false
 }
 
