@@ -1,0 +1,37 @@
+{
+  "proxies": [
+    {
+      "id": "63decb25-4778-42d4-922f-f87bc5ba2eb7",
+      "name": "洛杉矶-1",
+      "url": "socks5://suno001:Aa112211@38.30.237.95:6666",
+      "status": "active",
+      "addedAt": 1775239419020,
+      "lastTestedAt": 1775264669017
+    },
+    {
+      "id": "0e31ea10-8d5e-4a64-b39a-24b1c3c8d928",
+      "name": "洛杉矶-2",
+      "url": "socks5://suno001:Aa112211@149.119.51.155:6666",
+      "status": "active",
+      "addedAt": 1775239506855,
+      "lastTestedAt": 1775264670766
+    },
+    {
+      "id": "b01478a8-734f-4c4f-9e21-739ec3c3bbf0",
+      "name": "弗吉尼亚-1",
+      "url": "socks5://suno001:Aa112211@209.213.216.166:6666",
+      "status": "active",
+      "addedAt": 1775239535345,
+      "lastTestedAt": 1775264673447
+    },
+    {
+      "id": "277fc45f-2280-4422-a82d-b7d40b1037c5",
+      "name": "弗吉尼亚-2",
+      "url": "socks5://suno001:Aa112211@216.132.8.194:6666",
+      "status": "active",
+      "addedAt": 1775239555797,
+      "lastTestedAt": 1775264675303
+    }
+  ],
+  "lastUpdated": 1775264675303
+}

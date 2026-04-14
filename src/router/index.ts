@@ -1,0 +1,140 @@
+import type { App } from 'vue'
+import type { RouteRecordRaw } from 'vue-router'
+import { createRouter, createWebHashHistory } from 'vue-router'
+import { setupPageGuard } from './permission'
+import { ChatLayout } from '@/views/chat/layout'
+
+const routes: RouteRecordRaw[] = [
+  {
+    path: '/',
+    name: 'Root',
+    component: ChatLayout,
+    redirect: '/chat',
+    children: [
+      {
+        path: '/chat/:uuid?',
+        name: 'Chat',
+        component: () => import('@/views/chat/index.vue'),
+      },
+    ],
+  },
+
+  {
+    path: '/admin',
+    name: 'Admin',
+    component: () => import('@/views/admin/Layout.vue'),
+    redirect: '/admin/pool',
+    children: [
+      {
+        path: 'pool',
+        name: 'AdminPool',
+        component: () => import('@/views/admin/Pool.vue'),
+      },
+      {
+        path: 'claude-pool',
+        name: 'AdminClaudePool',
+        component: () => import('@/views/admin/ClaudePool.vue'),
+      },
+      {
+        path: 'kiro-pool',
+        name: 'AdminKiroPool',
+        component: () => import('@/views/admin/KiroPool.vue'),
+      },
+      {
+        path: 'gemini-pool',
+        name: 'AdminGeminiPool',
+        component: () => import('@/views/admin/GeminiPool.vue'),
+      },
+      {
+        path: 'clewdr-logs',
+        name: 'AdminClewdrLogs',
+        component: () => import('@/views/admin/ClewdrLogs.vue'),
+      },
+      {
+        path: 'proxies',
+        name: 'AdminProxies',
+        component: () => import('@/views/admin/Proxies.vue'),
+      },
+      {
+        path: 'logs',
+        name: 'AdminLogs',
+        component: () => import('@/views/admin/Logs.vue'),
+      },
+    ],
+  },
+
+  {
+    path: '/admin-v2',
+    name: 'AdminV2',
+    component: () => import('@/views/admin-v2/Layout.vue'),
+    redirect: '/admin-v2/dashboard',
+    children: [
+      {
+        path: 'dashboard',
+        name: 'AdminV2Dashboard',
+        component: () => import('@/views/admin-v2/Dashboard.vue'),
+      },
+      {
+        path: 'pool',
+        name: 'AdminV2Pool',
+        component: () => import('@/views/admin-v2/AccountPool.vue'),
+      },
+      {
+        path: 'proxies',
+        name: 'AdminV2Proxies',
+        component: () => import('@/views/admin-v2/ProxyManager.vue'),
+      },
+      {
+        path: 'logs',
+        name: 'AdminV2Logs',
+        component: () => import('@/views/admin-v2/RequestLogs.vue'),
+      },
+      {
+        path: 'settings',
+        name: 'AdminV2Settings',
+        component: () => import('@/views/admin-v2/Settings.vue'),
+      },
+      {
+        path: "codex-pool",
+        name: "AdminV2CodexPool",
+        component: () => import("@/views/admin-v2/CodexPool.vue"),
+      },
+      {
+        path: "clewdr-logs",
+        name: "AdminV2ClewdrLogs",
+        component: () => import("@/views/admin-v2/ClewdrSystemLogs.vue"),
+      },
+    ],
+  },
+
+  {
+    path: '/404',
+    name: '404',
+    component: () => import('@/views/exception/404/index.vue'),
+  },
+
+  {
+    path: '/500',
+    name: '500',
+    component: () => import('@/views/exception/500/index.vue'),
+  },
+
+  {
+    path: '/:pathMatch(.*)*',
+    name: 'notFound',
+    redirect: '/404',
+  },
+]
+
+export const router = createRouter({
+  history: createWebHashHistory(),
+  routes,
+  scrollBehavior: () => ({ left: 0, top: 0 }),
+})
+
+setupPageGuard(router)
+
+export async function setupRouter(app: App) {
+  app.use(router)
+  await router.isReady()
+}
