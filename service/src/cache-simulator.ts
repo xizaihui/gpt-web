@@ -29,8 +29,8 @@ import crypto from "crypto"
 
 // OpenAI extended caching for gpt-5.4 can last up to 24h,
 // in-memory can last up to 1h. We use 1h as a safe default.
-const CACHE_TTL_MS = 3_600_000 // 1 hour
-const CLEANUP_INTERVAL_MS = 300_000 // clean up every 5 min
+const CACHE_TTL_MS = 300_000 // 1 hour
+const CLEANUP_INTERVAL_MS = 60_000 // clean up every 5 min
 
 interface SessionState {
   prevPromptTokens: number
