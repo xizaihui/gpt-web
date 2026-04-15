@@ -3,7 +3,6 @@ import {
   getNextAccount, recordError, refreshAccount,
   proxyFetch, getProxyUrl, CODEX_MODELS,
 } from "./codex"
-import { deriveSessionId, calculateCache } from "./cache-simulator"
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 const CODEX_ENDPOINT = "/codex/responses"
@@ -19,45 +18,6 @@ export async function handleModelsList(_req: Request, res: Response) {
   res.json({ object: "list", data: models })
 }
 
-/**
- * Build NewAPI-compatible usage object with cache simulation.
- * Outputs all field variants so both old and new NewAPI versions can pick up cache data.
- */
-function buildUsage(
-  u: any,
-  sessionId: string,
-) {
-  const promptTokens = u.input_tokens || 0
-  const completionTokens = u.output_tokens || 0
-  const upstreamCached = u.input_tokens_details?.cached_tokens || 0
-
-  const cache = calculateCache(sessionId, promptTokens, upstreamCached)
-
-  console.log(
-    `[OpenAI-GW][Cache] session=${sessionId} prompt=${promptTokens} ` +
-    `upstream_cached=${upstreamCached} → cache_read=${cache.cacheReadTokens} cache_write=${cache.cacheWriteTokens}`
-  )
-
-  return {
-    prompt_tokens: promptTokens,
-    completion_tokens: completionTokens,
-    total_tokens: promptTokens + completionTokens,
-    // Standard OpenAI format (NewAPI reads cached_tokens from here)
-    prompt_tokens_details: {
-      cached_tokens: cache.cacheReadTokens,
-      cached_creation_tokens: cache.cacheWriteTokens,
-    },
-    completion_tokens_details: {
-      reasoning_tokens: u.output_tokens_details?.reasoning_tokens || 0,
-    },
-    // Extra fields for NewAPI compatibility (various versions)
-    prompt_cache_hit_tokens: cache.cacheReadTokens,
-    claude_cache_creation_5_m_tokens: cache.cacheWriteTokens,
-    cache_creation_input_tokens: cache.cacheWriteTokens,
-    cache_read_input_tokens: cache.cacheReadTokens,
-  }
-}
-
 // ── Chat Completions ──
 export async function handleChatCompletions(req: Request, res: Response) {
   try {
@@ -66,9 +26,6 @@ export async function handleChatCompletions(req: Request, res: Response) {
     const messages: Array<{ role: string; content: any }> = body.messages || []
     const stream: boolean = body.stream !== false
     const reasoningEffort: string | undefined = body.reasoning_effort
-
-    // Derive session ID for cache simulation (before model manipulation)
-    const sessionId = deriveSessionId(messages)
 
     // Detect -thinking suffix
     let reasoning = reasoningEffort
@@ -119,7 +76,7 @@ export async function handleChatCompletions(req: Request, res: Response) {
     }
 
     const url = `${CODEX_BASE_URL}${CODEX_ENDPOINT}`
-    console.log(`[OpenAI-GW] POST ${url} | model=${model} | account=${account.email} | msgs=${input.length} | stream=${stream} | reasoning=${reasoning || "off"} | sid=${sessionId}`)
+    console.log(`[OpenAI-GW] POST ${url} | model=${model} | account=${account.email} | msgs=${input.length} | stream=${stream} | reasoning=${reasoning || "off"}`)
 
     const proxyUrl = getProxyUrl(account.proxy)
     let response = await proxyFetch(url, {
@@ -232,7 +189,14 @@ export async function handleChatCompletions(req: Request, res: Response) {
               if (eventType === "response.completed" && parsed.response) {
                 const u = parsed.response.usage
                 if (u) {
-                  usageData = buildUsage(u, sessionId)
+                  usageData = {
+                    prompt_tokens: u.input_tokens || 0,
+                    completion_tokens: u.output_tokens || 0,
+                    total_tokens: (u.input_tokens || 0) + (u.output_tokens || 0),
+                    prompt_tokens_details: { cached_tokens: u.input_tokens_details?.cached_tokens || 0 },
+                    completion_tokens_details: { reasoning_tokens: u.output_tokens_details?.reasoning_tokens || 0 },
+                    cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
+                  }
                 }
                 // Send final chunk with finish_reason
                 const finalChunk: any = {
@@ -291,7 +255,15 @@ export async function handleChatCompletions(req: Request, res: Response) {
                 if (reasoning && reasoning !== "none") responseModel += "-thinking"
               }
               if (parsed.type === "response.completed" && parsed.response?.usage) {
-                usageData = buildUsage(parsed.response.usage, sessionId)
+                const u = parsed.response.usage
+                usageData = {
+                  prompt_tokens: u.input_tokens || 0,
+                  completion_tokens: u.output_tokens || 0,
+                  total_tokens: (u.input_tokens || 0) + (u.output_tokens || 0),
+                  prompt_tokens_details: { cached_tokens: u.input_tokens_details?.cached_tokens || 0 },
+                  completion_tokens_details: { reasoning_tokens: u.output_tokens_details?.reasoning_tokens || 0 },
+                    cache_creation_input_tokens: u.cache_creation_input_tokens || 0,
+                }
               }
               if (parsed.type === "response.failed") {
                 const errDetail = parsed.response?.error?.message || "upstream failed"
