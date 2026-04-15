@@ -1,20 +1,36 @@
 /**
  * Prompt Cache Simulator for OpenAI Gateway
  *
- * Since Codex Responses API may not return cache token data,
- * this module simulates Anthropic-style prompt caching to provide
- * accurate cache_read / cache_write token counts for NewAPI billing.
+ * Since Codex Responses API does not return cache token data,
+ * this module simulates OpenAI prompt caching behavior.
  *
- * Logic mirrors kiro-gateway/kiro/cache_simulator.py:
- * - First request in session: cache_write = prompt_tokens, cache_read = 0
- * - Subsequent requests (same session, within TTL): cache_read = prev prompt_tokens
- * - Cache TTL: 300s (matches Anthropic)
+ * OpenAI prompt caching facts:
+ * - Automatic for prompts ≥1024 tokens, exact prefix match
+ * - In-memory TTL: 5-10 min (up to 1h during off-peak)
+ * - Extended (gpt-5.4): up to 24h
+ * - Cache writes are FREE — only cache reads get 90% discount
+ * - cached_tokens is always ≤ prompt_tokens
+ * - uncached_input = prompt_tokens - cached_tokens
+ *
+ * Billing formula (per OpenAI docs):
+ *   fee = uncached_input * input_price
+ *       + cached_tokens * cached_input_price   (10% of input_price)
+ *       + completion_tokens * output_price
+ *
+ * Simulation logic:
+ * - First request in session: cached_tokens = 0
+ * - Subsequent requests (same session, within TTL):
+ *   cached_tokens = previous request's prompt_tokens
+ *   (because the entire previous prefix is still in cache)
+ * - TTL: 1 hour (conservative estimate for gpt-5.4 extended caching)
  */
 
 import crypto from "crypto"
 
-const CACHE_TTL_MS = 300_000 // 5 minutes
-const CLEANUP_INTERVAL_MS = 60_000
+// OpenAI extended caching for gpt-5.4 can last up to 24h,
+// in-memory can last up to 1h. We use 1h as a safe default.
+const CACHE_TTL_MS = 3_600_000 // 1 hour
+const CLEANUP_INTERVAL_MS = 300_000 // clean up every 5 min
 
 interface SessionState {
   prevPromptTokens: number
@@ -38,6 +54,7 @@ function maybeCleanup() {
 /**
  * Derive a session ID from the messages array.
  * Uses system prompt (first 200 chars) + first user message (first 100 chars).
+ * Same system + same first user message = same conversation session.
  */
 export function deriveSessionId(messages: Array<{ role: string; content: any }>): string {
   const parts: string[] = []
@@ -69,6 +86,10 @@ export interface CacheResult {
  *
  * If the upstream already returned real cached_tokens > 0, those are used
  * (pass-through mode). Otherwise we simulate.
+ *
+ * Returns:
+ *   cacheReadTokens = cached_tokens (to be billed at 10% rate)
+ *   cacheWriteTokens = uncached new tokens (for logging only, NOT billed extra)
  */
 export function calculateCache(
   sessionId: string,
@@ -89,7 +110,7 @@ export function calculateCache(
   const now = Date.now()
   const state = sessions.get(sessionId)
 
-  // Case 1: First request or expired
+  // Case 1: First request or expired — no cache hit
   if (!state || (now - state.lastRequestTime) > CACHE_TTL_MS) {
     sessions.set(sessionId, {
       prevPromptTokens: promptTokens,
@@ -99,7 +120,8 @@ export function calculateCache(
     return { promptTokens, cacheReadTokens: 0, cacheWriteTokens: promptTokens }
   }
 
-  // Case 2: Subsequent request within TTL
+  // Case 2: Subsequent request within TTL — previous prompt is cached
+  // cached_tokens = prev prompt_tokens (the entire previous prefix)
   let cacheRead = state.prevPromptTokens
   if (cacheRead > promptTokens) cacheRead = promptTokens
   const cacheWrite = Math.max(0, promptTokens - cacheRead)
