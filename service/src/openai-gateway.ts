@@ -20,8 +20,18 @@ export async function handleModelsList(_req: Request, res: Response) {
 }
 
 /**
- * Build NewAPI-compatible usage object with cache simulation.
- * Outputs all field variants so both old and new NewAPI versions can pick up cache data.
+ * Build OpenAI-standard usage object with cache simulation.
+ *
+ * IMPORTANT: OpenAI prompt caching is FREE for cache writes — only cache reads
+ * get a discount (10% of input price). This is different from Anthropic where
+ * cache writes cost 1.25x.
+ *
+ * Therefore we ONLY output `cached_tokens` (cache read) in prompt_tokens_details,
+ * matching exactly what Azure/OpenAI returns. No cache_creation / cache_write fields.
+ *
+ * OpenToken billing for OpenAI semantic (non-Anthropic):
+ *   fee = (prompt_tokens - cached_tokens) * 1.0  +  cached_tokens * cache_ratio(0.1)
+ *       + completion_tokens * completion_ratio
  */
 function buildUsage(
   u: any,
@@ -38,23 +48,18 @@ function buildUsage(
     `upstream_cached=${upstreamCached} → cache_read=${cache.cacheReadTokens} cache_write=${cache.cacheWriteTokens}`
   )
 
+  // Return OpenAI-standard format only — no Anthropic cache_creation fields
+  // This matches what Azure OpenAI returns for GPT-5.4
   return {
     prompt_tokens: promptTokens,
     completion_tokens: completionTokens,
     total_tokens: promptTokens + completionTokens,
-    // Standard OpenAI format (NewAPI reads cached_tokens from here)
     prompt_tokens_details: {
       cached_tokens: cache.cacheReadTokens,
-      cached_creation_tokens: cache.cacheWriteTokens,
     },
     completion_tokens_details: {
       reasoning_tokens: u.output_tokens_details?.reasoning_tokens || 0,
     },
-    // Extra fields for NewAPI compatibility (various versions)
-    prompt_cache_hit_tokens: cache.cacheReadTokens,
-    claude_cache_creation_5_m_tokens: cache.cacheWriteTokens,
-    cache_creation_input_tokens: cache.cacheWriteTokens,
-    cache_read_input_tokens: cache.cacheReadTokens,
   }
 }
 
