@@ -7,7 +7,6 @@ import ModelSelector from './components/ModelSelector.vue'
 import Icon from '@/components/common/Icon.vue'
 import { useScroll } from './hooks/useScroll'
 import { useChat } from './hooks/useChat'
-import { useTextStreamer } from './hooks/useTextStreamer'
 import HeaderComponent from './components/Header/index.vue'
 import { useBasicLayout } from '@/hooks/useBasicLayout'
 import { useChatStore, useSettingStore, useAppStore } from '@/store'
@@ -313,55 +312,41 @@ async function streamChat(
   options: Chat.ConversationRequest,
   files?: Array<{ name: string; type: string; base64: string }>,
 ) {
-  // Smooth text streamer: buffers incoming text and releases it at a
-  // steady visual rate, preventing the jarring "burst then pause" effect
-  // that happens with ClewdR's tool-mode buffering.
-  let latestUpdateData: Partial<Chat.Chat> = {}
-  const streamer = useTextStreamer((displayText, _meta) => {
-    updateChat(+uuid, targetIndex, { ...latestUpdateData, text: displayText } as Chat.Chat)
-    scrollToBottomIfAtBottom()
+  await fetchChatAPIProcess({
+    prompt: message,
+    options,
+    model: selectedModel.value,
+    apiBaseUrl: settingStore.apiBaseUrl,
+    apiKey: settingStore.apiKey,
+    files,
+    signal: controller.signal,
+    history,
+    reasoning: thinkingEnabled.value ? 'high' : undefined,
+    chatUuid: +uuid,
+    onProgress: (data) => {
+      waitingForFirstToken.value = false
+      const responseModel = data.detail?.model || data.model || selectedModel.value
+      const updateData: Partial<Chat.Chat> = {
+        dateTime: new Date().toLocaleString(),
+        text: data.text ?? '',
+        inversion: false,
+        error: false,
+        loading: true,
+        model: responseModel,
+        conversationOptions: { conversationId: data.conversationId, parentMessageId: data.id },
+        requestOptions: { prompt: message, options: { ...options } },
+      }
+      if (data.reasoning) {
+        updateData.reasoning = data.reasoning
+      }
+      if (data.usage) {
+        updateData.usage = data.usage
+      }
+      updateChat(+uuid, targetIndex, updateData as Chat.Chat)
+      scrollToBottomIfAtBottom()
+    },
   })
-
-  try {
-    await fetchChatAPIProcess({
-      prompt: message,
-      options,
-      model: selectedModel.value,
-      apiBaseUrl: settingStore.apiBaseUrl,
-      apiKey: settingStore.apiKey,
-      files,
-      signal: controller.signal,
-      history,
-      reasoning: thinkingEnabled.value ? 'high' : undefined,
-      chatUuid: +uuid,
-      onProgress: (data) => {
-        waitingForFirstToken.value = false
-        const responseModel = data.detail?.model || data.model || selectedModel.value
-        latestUpdateData = {
-          dateTime: new Date().toLocaleString(),
-          inversion: false,
-          error: false,
-          loading: true,
-          model: responseModel,
-          conversationOptions: { conversationId: data.conversationId, parentMessageId: data.id },
-          requestOptions: { prompt: message, options: { ...options } },
-        }
-        if (data.reasoning) {
-          latestUpdateData.reasoning = data.reasoning
-        }
-        if (data.usage) {
-          latestUpdateData.usage = data.usage
-        }
-        // Push full text into streamer — it diffs and animates new chars
-        streamer.push(data.text ?? '', data)
-      },
-    })
-  } finally {
-    // Stream ended — flush any remaining buffered text immediately
-    streamer.flush()
-    streamer.stop()
-    updateChatSome(+uuid, targetIndex, { loading: false })
-  }
+  updateChatSome(+uuid, targetIndex, { loading: false })
 }
 
 function handleStreamError(error: any, message: string, targetIndex: number, options: Chat.ConversationRequest) {
