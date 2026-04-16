@@ -7,6 +7,7 @@ import ModelSelector from './components/ModelSelector.vue'
 import Icon from '@/components/common/Icon.vue'
 import { useScroll } from './hooks/useScroll'
 import { useChat } from './hooks/useChat'
+import { useTextStreamer } from './hooks/useTextStreamer'
 import HeaderComponent from './components/Header/index.vue'
 import { useBasicLayout } from '@/hooks/useBasicLayout'
 import { useChatStore, useSettingStore, useAppStore } from '@/store'
@@ -312,41 +313,47 @@ async function streamChat(
   options: Chat.ConversationRequest,
   files?: Array<{ name: string; type: string; base64: string }>,
 ) {
-  await fetchChatAPIProcess({
-    prompt: message,
-    options,
-    model: selectedModel.value,
-    apiBaseUrl: settingStore.apiBaseUrl,
-    apiKey: settingStore.apiKey,
-    files,
-    signal: controller.signal,
-    history,
-    reasoning: thinkingEnabled.value ? 'high' : undefined,
-    chatUuid: +uuid,
-    onProgress: (data) => {
-      waitingForFirstToken.value = false
-      const responseModel = data.detail?.model || data.model || selectedModel.value
-      const updateData: Partial<Chat.Chat> = {
-        dateTime: new Date().toLocaleString(),
-        text: data.text ?? '',
-        inversion: false,
-        error: false,
-        loading: true,
-        model: responseModel,
-        conversationOptions: { conversationId: data.conversationId, parentMessageId: data.id },
-        requestOptions: { prompt: message, options: { ...options } },
-      }
-      if (data.reasoning) {
-        updateData.reasoning = data.reasoning
-      }
-      if (data.usage) {
-        updateData.usage = data.usage
-      }
-      updateChat(+uuid, targetIndex, updateData as Chat.Chat)
-      scrollToBottomIfAtBottom()
-    },
+  // Smooth text streamer — buffers chunks and releases at steady visual rate
+  let latestData: Partial<Chat.Chat> = {}
+  const streamer = useTextStreamer((displayText) => {
+    updateChat(+uuid, targetIndex, { ...latestData, text: displayText } as Chat.Chat)
+    scrollToBottomIfAtBottom()
   })
-  updateChatSome(+uuid, targetIndex, { loading: false })
+
+  try {
+    await fetchChatAPIProcess({
+      prompt: message,
+      options,
+      model: selectedModel.value,
+      apiBaseUrl: settingStore.apiBaseUrl,
+      apiKey: settingStore.apiKey,
+      files,
+      signal: controller.signal,
+      history,
+      reasoning: thinkingEnabled.value ? 'high' : undefined,
+      chatUuid: +uuid,
+      onProgress: (data) => {
+        waitingForFirstToken.value = false
+        const responseModel = data.detail?.model || data.model || selectedModel.value
+        latestData = {
+          dateTime: new Date().toLocaleString(),
+          inversion: false,
+          error: false,
+          loading: true,
+          model: responseModel,
+          conversationOptions: { conversationId: data.conversationId, parentMessageId: data.id },
+          requestOptions: { prompt: message, options: { ...options } },
+        }
+        if (data.reasoning) latestData.reasoning = data.reasoning
+        if (data.usage) latestData.usage = data.usage
+        streamer.push(data.text ?? '')
+      },
+    })
+  } finally {
+    streamer.flush()
+    streamer.stop()
+    updateChatSome(+uuid, targetIndex, { loading: false })
+  }
 }
 
 function handleStreamError(error: any, message: string, targetIndex: number, options: Chat.ConversationRequest) {
