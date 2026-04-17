@@ -4,6 +4,10 @@ import {
   proxyFetch, getProxyUrl, CODEX_MODELS,
 } from "./codex"
 import { deriveSessionId, calculateCache } from "./cache-simulator"
+import {
+  submitOai, hashApiKey, detectClientType,
+  extractFirstUserMessage, extractSystemHead,
+} from "./audit"
 
 const CODEX_BASE_URL = "https://chatgpt.com/backend-api"
 const CODEX_ENDPOINT = "/codex/responses"
@@ -65,6 +69,15 @@ function buildUsage(
 
 // ── Chat Completions ──
 export async function handleChatCompletions(req: Request, res: Response) {
+  const startedAt = Date.now()
+  const clientIp = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "").split(",")[0].trim()
+  const userAgent = String(req.headers["user-agent"] || "")
+  const bearer = String(req.headers.authorization || "").replace(/^Bearer\s+/i, "").replace(/^bearer\s+/i, "")
+  const apiKeyHash = bearer ? hashApiKey(bearer) : undefined
+  const originalBody = req.body || {}
+  const clientType = detectClientType(userAgent, originalBody)
+  const firstUserMessage = extractFirstUserMessage(originalBody.messages || [])
+  const systemPromptHead = extractSystemHead(originalBody)
   try {
     const body = req.body || {}
     let model: string = body.model || "gpt-5.4-mini"
@@ -196,6 +209,7 @@ export async function handleChatCompletions(req: Request, res: Response) {
       const decoder = new TextDecoder()
       let buffer = ""
       let usageData: any = null
+      let accumulatedText = ""
 
       try {
         for await (const chunk of reader) {
@@ -214,6 +228,7 @@ export async function handleChatCompletions(req: Request, res: Response) {
               const eventType = parsed.type
 
               if (eventType === "response.output_text.delta" && parsed.delta) {
+                accumulatedText += parsed.delta
                 const chunk = {
                   id: completionId, object: "chat.completion.chunk", created, model: responseModel,
                   choices: [{ index: 0, delta: { content: parsed.delta }, finish_reason: null }],
@@ -267,6 +282,32 @@ export async function handleChatCompletions(req: Request, res: Response) {
 
       res.write("data: [DONE]\n\n")
       res.end()
+
+      // Audit log (stream end)
+      const finalText = accumulatedText
+      submitOai({
+        session_id: sessionId,
+        api_key_hash: apiKeyHash,
+        client_ip: clientIp || undefined,
+        user_agent: userAgent || undefined,
+        client_type: clientType,
+        endpoint: "/v1/chat/completions",
+        model: responseModel,
+        status_code: 200,
+        duration_ms: Date.now() - startedAt,
+        is_stream: true,
+        has_tools: Array.isArray(originalBody.tools) && originalBody.tools.length > 0,
+        tool_count: Array.isArray(originalBody.tools) ? originalBody.tools.length : 0,
+        finish_reason_norm: "stop",
+        prompt_tokens: usageData?.prompt_tokens || 0,
+        completion_tokens: usageData?.completion_tokens || 0,
+        cached_tokens: usageData?.prompt_tokens_details?.cached_tokens || 0,
+        cache_write_tokens: 0,
+        request_body: originalBody,
+        response_text: finalText,
+        first_user_message: firstUserMessage,
+        system_prompt_head: systemPromptHead,
+      })
     } else {
       // ── Non-streaming mode ──
       let fullText = ""
@@ -327,6 +368,31 @@ export async function handleChatCompletions(req: Request, res: Response) {
       }
       if (usageData) result.usage = usageData
       res.json(result)
+
+      // Audit log (non-stream)
+      submitOai({
+        session_id: sessionId,
+        api_key_hash: apiKeyHash,
+        client_ip: clientIp || undefined,
+        user_agent: userAgent || undefined,
+        client_type: clientType,
+        endpoint: "/v1/chat/completions",
+        model: responseModel,
+        status_code: 200,
+        duration_ms: Date.now() - startedAt,
+        is_stream: false,
+        has_tools: Array.isArray(originalBody.tools) && originalBody.tools.length > 0,
+        tool_count: Array.isArray(originalBody.tools) ? originalBody.tools.length : 0,
+        finish_reason_norm: "stop",
+        prompt_tokens: usageData?.prompt_tokens || 0,
+        completion_tokens: usageData?.completion_tokens || 0,
+        cached_tokens: usageData?.prompt_tokens_details?.cached_tokens || 0,
+        cache_write_tokens: 0,
+        request_body: originalBody,
+        response_text: fullText,
+        first_user_message: firstUserMessage,
+        system_prompt_head: systemPromptHead,
+      })
     }
   } catch (err: any) {
     console.error(`[OpenAI-GW] Unhandled error: ${err.message}`)

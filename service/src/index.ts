@@ -20,6 +20,7 @@ import { runMigrations } from './dao/schema.js'
 import { migrateFromJson } from './dao/migrate-from-json.js'
 import { queryClewdrSystemLogs, getClewdrServiceStatus } from "./clewdr-logs-ssh.js"
 import { handleChatCompletions, handleModelsList } from "./openai-gateway"
+import { initAudit } from "./audit"
 
 const app = express()
 const router = express.Router()
@@ -1029,4 +1030,5 @@ router.get("/clewdr/service-status", auth, async (_req, res) => {
   }
 })
 
+initAudit();
 app.listen(3002, () => globalThis.console.log('Server is running on port 3002'))
