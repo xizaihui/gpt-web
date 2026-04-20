@@ -67,6 +67,135 @@ function buildUsage(
   }
 }
 
+// ────────────────────────────────────────────────────────────────────
+//  OpenAI ↔ Codex Responses API: tool-calling translation layer
+// ────────────────────────────────────────────────────────────────────
+//
+// OpenAI Chat Completions (what clients send us):
+//   messages[i] = { role, content?, tool_calls?, tool_call_id?, name? }
+//     role="assistant" may have tool_calls=[{id, type:"function", function:{name, arguments}}]
+//     role="tool"      carries tool_call_id + content (the tool's return value)
+//   tools       = [{ type:"function", function:{ name, description, parameters } }]
+//   tool_choice = "auto" | "none" | "required"
+//               | { type:"function", function:{ name } }
+//
+// Codex /backend-api/codex/responses (upstream):
+//   input[i] =
+//     { role:"user"|"assistant"|"system", content: string }            ← text turns
+//     { type:"function_call",        call_id, name, arguments:string } ← assistant's tool invocation
+//     { type:"function_call_output", call_id, output: string }         ← the tool's return value
+//   tools       = [{ type:"function", name, description, parameters }]  ← FLAT, NOT nested in .function
+//   tool_choice = "auto"|"none"|"required" | { type:"function", name }  ← flat too
+//
+// Quirks to remember:
+//   • Codex `tools` and the per-tool `tool_choice` are FLAT (no inner .function wrapper).
+//   • `call_id` is the stable correlation id across output_item.added,
+//     function_call_arguments.delta, output_item.done and the next turn's
+//     function_call_output. We reuse it verbatim as OpenAI `tool_calls[*].id`.
+//   • function_call_arguments.delta arrives keyed by `item_id` (Codex's
+//     internal item identifier), which can differ from the client-visible
+//     `call_id`. The translator aliases both ids to the same slot.
+
+function translateOpenAIToCodex(body: any): {
+  input: any[]
+  tools: any[] | undefined
+  toolChoice: any | undefined
+  systemMessage: string | undefined
+} {
+  const messages: any[] = Array.isArray(body.messages) ? body.messages : []
+  const inputItems: any[] = []
+  let systemMessage: string | undefined
+
+  const flattenContent = (c: any): string => {
+    if (typeof c === "string") return c
+    if (Array.isArray(c)) {
+      return c.map((p: any) => p?.type === "text" ? (p.text || "") : "").join("")
+    }
+    if (c == null) return ""
+    return String(c)
+  }
+
+  for (const msg of messages) {
+    const role = msg?.role
+    if (role === "system" || role === "developer") {
+      const text = flattenContent(msg.content)
+      if (text) systemMessage = (systemMessage ? systemMessage + "\n" : "") + text
+      continue
+    }
+
+    if (role === "tool") {
+      // OpenAI tool-result message → Codex function_call_output item.
+      if (!msg.tool_call_id) continue
+      inputItems.push({
+        type: "function_call_output",
+        call_id: msg.tool_call_id,
+        output: flattenContent(msg.content),
+      })
+      continue
+    }
+
+    if (role === "assistant" && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0) {
+      // Assistant turn that invoked tools. Emit leading text first (if any),
+      // then one function_call item per invocation with its call_id preserved.
+      const textContent = flattenContent(msg.content)
+      if (textContent) {
+        inputItems.push({ role: "assistant", content: textContent })
+      }
+      for (const tc of msg.tool_calls) {
+        if (!tc || tc.type !== "function" || !tc.function || !tc.id) continue
+        inputItems.push({
+          type: "function_call",
+          call_id: tc.id,
+          name: tc.function.name,
+          arguments: typeof tc.function.arguments === "string"
+            ? tc.function.arguments
+            : JSON.stringify(tc.function.arguments || {}),
+        })
+      }
+      continue
+    }
+
+    if (role === "user" || role === "assistant") {
+      inputItems.push({ role, content: flattenContent(msg.content) })
+      continue
+    }
+    // Unknown role: skip.
+  }
+
+  // --- tools ---
+  let tools: any[] | undefined
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
+    tools = []
+    for (const t of body.tools) {
+      if (!t || t.type !== "function") continue
+      // Accept both OpenAI-standard (.function nested) and Codex-flat inputs.
+      const fn = t.function || t
+      if (!fn.name) continue
+      tools.push({
+        type: "function",
+        name: fn.name,
+        ...(fn.description ? { description: fn.description } : {}),
+        ...(fn.parameters ? { parameters: fn.parameters } : {}),
+      })
+    }
+    if (tools.length === 0) tools = undefined
+  }
+
+  // --- tool_choice ---
+  let toolChoice: any | undefined
+  if (body.tool_choice != null) {
+    const tc = body.tool_choice
+    if (typeof tc === "string") {
+      toolChoice = tc  // "auto" | "none" | "required"
+    } else if (typeof tc === "object" && tc.type === "function") {
+      const name = tc.function?.name || tc.name
+      if (name) toolChoice = { type: "function", name }
+    }
+  }
+
+  return { input: inputItems, tools, toolChoice, systemMessage }
+}
+
 // ── Chat Completions ──
 export async function handleChatCompletions(req: Request, res: Response) {
   const startedAt = Date.now()
@@ -95,27 +224,14 @@ export async function handleChatCompletions(req: Request, res: Response) {
       if (!reasoning) reasoning = "medium"
     }
 
-    // Separate system message and build input
-    let systemMessage: string | undefined
-    const input: Array<{ role: string; content: string }> = []
-
-    for (const msg of messages) {
-      const content = typeof msg.content === "string"
-        ? msg.content
-        : Array.isArray(msg.content)
-          ? msg.content.map((p: any) => p.type === "text" ? p.text : "").join("")
-          : String(msg.content)
-
-      if (msg.role === "system" || msg.role === "developer") {
-        systemMessage = (systemMessage ? systemMessage + "\n" : "") + content
-      } else {
-        input.push({ role: msg.role === "assistant" ? "assistant" : "user", content })
-      }
-    }
-
-    if (input.length === 0) {
-      input.push({ role: "user", content: "hi" })
-    }
+    // Translate the whole request (messages + tools + tool_choice) to Codex
+    // Responses-API shape in one pass. This is where the OpenAI function-
+    // calling compatibility layer lives.
+    const translated = translateOpenAIToCodex(body)
+    const systemMessage = translated.systemMessage
+    const input = translated.input.length > 0
+      ? translated.input
+      : [{ role: "user", content: "hi" }]
 
     // Get account
     const account = getNextAccount()
@@ -135,9 +251,25 @@ export async function handleChatCompletions(req: Request, res: Response) {
     if (reasoning && reasoning !== "none") {
       requestBody.reasoning = { effort: reasoning, summary: "auto" }
     }
+    if (translated.tools) {
+      requestBody.tools = translated.tools
+    }
+    if (translated.toolChoice !== undefined) {
+      requestBody.tool_choice = translated.toolChoice
+    }
+    // parallel_tool_calls pass-through (OpenAI sets this to signal "I can
+    // handle multiple function_call items in one turn").
+    if (body.parallel_tool_calls != null) {
+      requestBody.parallel_tool_calls = body.parallel_tool_calls
+    }
 
     const url = `${CODEX_BASE_URL}${CODEX_ENDPOINT}`
-    console.log(`[OpenAI-GW] POST ${url} | model=${model} | account=${account.email} | msgs=${input.length} | stream=${stream} | reasoning=${reasoning || "off"} | sid=${sessionId}`)
+    const hasTools = Array.isArray(requestBody.tools) && requestBody.tools.length > 0
+    console.log(
+      `[OpenAI-GW] POST ${url} | model=${model} | account=${account.email} | ` +
+      `msgs=${input.length} | tools=${hasTools ? requestBody.tools.length : 0} | ` +
+      `stream=${stream} | reasoning=${reasoning || "off"} | sid=${sessionId}`
+    )
 
     const proxyUrl = getProxyUrl(account.proxy)
     let response = await proxyFetch(url, {
@@ -210,6 +342,14 @@ export async function handleChatCompletions(req: Request, res: Response) {
       let buffer = ""
       let usageData: any = null
       let accumulatedText = ""
+      // Tool-call streaming state. We index tool_calls by *both* the Codex
+      // `call_id` (client-visible) and the internal `item.id` (used by the
+      // argument delta events), since they can differ.
+      const toolCallIndexById = new Map<string, number>()
+      const toolCallArgsById = new Map<string, string>()
+      const toolCallNameById = new Map<string, string>()
+      const toolCallSerialized: Array<{ id: string; name: string; args: string }> = []
+      let emittedAnyToolCall = false
 
       try {
         for await (const chunk of reader) {
@@ -244,6 +384,67 @@ export async function handleChatCompletions(req: Request, res: Response) {
                 res.write(`data: ${JSON.stringify(chunk)}\n\n`)
               }
 
+              // ── Function-call support ──
+              // Codex fires output_item.added whenever a new function_call
+              // begins, carrying both a stable client-visible `call_id` and
+              // an internal `item.id`. Later argument deltas address the
+              // internal id; the client gets the call_id. Alias both so the
+              // delta handler can find the slot either way.
+              if (eventType === "response.output_item.added" && parsed.item?.type === "function_call") {
+                const callId: string = parsed.item.call_id
+                const internalId: string | undefined = parsed.item.id
+                const name: string = parsed.item.name
+                const idx = toolCallSerialized.length
+                toolCallIndexById.set(callId, idx)
+                if (internalId && internalId !== callId) toolCallIndexById.set(internalId, idx)
+                toolCallNameById.set(callId, name)
+                toolCallArgsById.set(callId, "")
+                toolCallSerialized.push({ id: callId, name, args: "" })
+                emittedAnyToolCall = true
+                const startChunk = {
+                  id: completionId, object: "chat.completion.chunk", created, model: responseModel,
+                  choices: [{
+                    index: 0,
+                    delta: {
+                      tool_calls: [{
+                        index: idx,
+                        id: callId,
+                        type: "function",
+                        function: { name, arguments: "" },
+                      }],
+                    },
+                    finish_reason: null,
+                  }],
+                }
+                res.write(`data: ${JSON.stringify(startChunk)}\n\n`)
+              }
+
+              if (eventType === "response.function_call_arguments.delta" && parsed.delta) {
+                const key = parsed.item_id
+                const idx = toolCallIndexById.get(key)
+                if (idx != null) {
+                  toolCallSerialized[idx].args += parsed.delta
+                  const deltaChunk = {
+                    id: completionId, object: "chat.completion.chunk", created, model: responseModel,
+                    choices: [{
+                      index: 0,
+                      delta: {
+                        tool_calls: [{
+                          index: idx,
+                          function: { arguments: parsed.delta },
+                        }],
+                      },
+                      finish_reason: null,
+                    }],
+                  }
+                  res.write(`data: ${JSON.stringify(deltaChunk)}\n\n`)
+                }
+              }
+
+              // function_call_arguments.done and output_item.done are
+              // informational — the OpenAI protocol is already satisfied by
+              // the argument deltas that preceded them.
+
               if (eventType === "response.created" && parsed.response?.model) {
                 responseModel = parsed.response.model
                 if (reasoning && reasoning !== "none") responseModel += "-thinking"
@@ -254,10 +455,11 @@ export async function handleChatCompletions(req: Request, res: Response) {
                 if (u) {
                   usageData = buildUsage(u, sessionId)
                 }
-                // Send final chunk with finish_reason
+                // finish_reason must reflect whether tool calls were emitted.
+                const finishReason = emittedAnyToolCall ? "tool_calls" : "stop"
                 const finalChunk: any = {
                   id: completionId, object: "chat.completion.chunk", created, model: responseModel,
-                  choices: [{ index: 0, delta: {}, finish_reason: "stop" }],
+                  choices: [{ index: 0, delta: {}, finish_reason: finishReason }],
                 }
                 if (usageData) finalChunk.usage = usageData
                 res.write(`data: ${JSON.stringify(finalChunk)}\n\n`)
@@ -298,13 +500,15 @@ export async function handleChatCompletions(req: Request, res: Response) {
         is_stream: true,
         has_tools: Array.isArray(originalBody.tools) && originalBody.tools.length > 0,
         tool_count: Array.isArray(originalBody.tools) ? originalBody.tools.length : 0,
-        finish_reason_norm: "stop",
+        finish_reason_norm: emittedAnyToolCall ? "tool_calls" : "stop",
         prompt_tokens: usageData?.prompt_tokens || 0,
         completion_tokens: usageData?.completion_tokens || 0,
         cached_tokens: usageData?.prompt_tokens_details?.cached_tokens || 0,
         cache_write_tokens: 0,
         request_body: originalBody,
-        response_text: finalText,
+        response_text: finalText || (toolCallSerialized.length > 0
+          ? `[tool_calls] ${JSON.stringify(toolCallSerialized)}`
+          : ""),
         first_user_message: firstUserMessage,
         system_prompt_head: systemPromptHead,
       })
@@ -313,6 +517,8 @@ export async function handleChatCompletions(req: Request, res: Response) {
       let fullText = ""
       let reasoningText = ""
       let usageData: any = null
+      const nsToolCallIndexById = new Map<string, number>()
+      const nsToolCalls: Array<{ id: string; type: "function"; function: { name: string; arguments: string } }> = []
       const reader = response.body as any
       const decoder = new TextDecoder()
       let buffer = ""
@@ -335,6 +541,32 @@ export async function handleChatCompletions(req: Request, res: Response) {
               if (parsed.type === "response.created" && parsed.response?.model) {
                 responseModel = parsed.response.model
                 if (reasoning && reasoning !== "none") responseModel += "-thinking"
+              }
+              // Track function_call items for non-streaming response.
+              if (parsed.type === "response.output_item.added" && parsed.item?.type === "function_call") {
+                const callId: string = parsed.item.call_id
+                const internalId: string | undefined = parsed.item.id
+                const idx = nsToolCalls.length
+                nsToolCallIndexById.set(callId, idx)
+                if (internalId && internalId !== callId) nsToolCallIndexById.set(internalId, idx)
+                nsToolCalls.push({
+                  id: callId,
+                  type: "function",
+                  function: { name: parsed.item.name, arguments: "" },
+                })
+              }
+              if (parsed.type === "response.function_call_arguments.delta" && parsed.delta) {
+                const idx = nsToolCallIndexById.get(parsed.item_id)
+                if (idx != null) nsToolCalls[idx].function.arguments += parsed.delta
+              }
+              if (parsed.type === "response.output_item.done" && parsed.item?.type === "function_call") {
+                // Authoritative arguments string; overwrite whatever we
+                // accumulated from deltas.
+                const callId: string = parsed.item.call_id
+                const idx = nsToolCallIndexById.get(callId)
+                if (idx != null && typeof parsed.item.arguments === "string") {
+                  nsToolCalls[idx].function.arguments = parsed.item.arguments
+                }
               }
               if (parsed.type === "response.completed" && parsed.response?.usage) {
                 usageData = buildUsage(parsed.response.usage, sessionId)
@@ -359,8 +591,12 @@ export async function handleChatCompletions(req: Request, res: Response) {
         model: responseModel,
         choices: [{
           index: 0,
-          message: { role: "assistant", content: fullText },
-          finish_reason: "stop",
+          message: {
+            role: "assistant",
+            content: fullText || null,
+            ...(nsToolCalls.length > 0 ? { tool_calls: nsToolCalls } : {}),
+          },
+          finish_reason: nsToolCalls.length > 0 ? "tool_calls" : "stop",
         }],
       }
       if (reasoningText) {
@@ -383,13 +619,15 @@ export async function handleChatCompletions(req: Request, res: Response) {
         is_stream: false,
         has_tools: Array.isArray(originalBody.tools) && originalBody.tools.length > 0,
         tool_count: Array.isArray(originalBody.tools) ? originalBody.tools.length : 0,
-        finish_reason_norm: "stop",
+        finish_reason_norm: nsToolCalls.length > 0 ? "tool_calls" : "stop",
         prompt_tokens: usageData?.prompt_tokens || 0,
         completion_tokens: usageData?.completion_tokens || 0,
         cached_tokens: usageData?.prompt_tokens_details?.cached_tokens || 0,
         cache_write_tokens: 0,
         request_body: originalBody,
-        response_text: fullText,
+        response_text: fullText || (nsToolCalls.length > 0
+          ? `[tool_calls] ${JSON.stringify(nsToolCalls)}`
+          : ""),
         first_user_message: firstUserMessage,
         system_prompt_head: systemPromptHead,
       })
