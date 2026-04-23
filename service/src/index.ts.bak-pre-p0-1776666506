@@ -2,7 +2,7 @@ import express from 'express'
 import type { RequestProps } from './types'
 import type { ChatMessage } from './chatgpt'
 import { chatReplyProcess, chatConfig, currentModel } from './chatgpt'
-import { auth, adminAuth } from './middleware/auth'
+import { auth, auth } from './middleware/auth'
 import { limiter } from './middleware/limiter'
 import { isNotEmptyString } from './utils/is'
 import * as storage from './storage'
@@ -19,7 +19,7 @@ import {
 import { runMigrations } from './dao/schema.js'
 import { migrateFromJson } from './dao/migrate-from-json.js'
 import { queryClewdrSystemLogs, getClewdrServiceStatus } from "./clewdr-logs-ssh.js"
-import { handleChatCompletions, handleModelsList, handleResponses } from "./openai-gateway"
+import { handleChatCompletions, handleModelsList } from "./openai-gateway"
 import {
   handleClewdrList, handleClewdrDetail,
   handleOaiList, handleOaiDetail,
@@ -32,18 +32,7 @@ const app = express()
 const router = express.Router()
 
 app.use(express.static('public'))
-app.use(express.json({ limit: process.env.BODY_SIZE_LIMIT || '2mb' }))
-
-// ── Global error safety net ──
-// Anything uncaught elsewhere (bad promise chain inside a DAO helper, audit
-// serialization hiccup, etc.) would otherwise crash the worker and drop every
-// in-flight stream. Log and keep running.
-process.on('unhandledRejection', (reason: any) => {
-  console.error('[FATAL unhandledRejection]', reason?.stack || reason)
-})
-process.on('uncaughtException', (err: any) => {
-  console.error('[FATAL uncaughtException]', err?.stack || err)
-})
+app.use(express.json({ limit: '50mb' }))
 
 const allowedOrigins = process.env.CORS_ORIGINS
   ? process.env.CORS_ORIGINS.split(',').map(s => s.trim())
@@ -84,8 +73,6 @@ function gatewayAuth(req, res, next) {
 
 router.post('/openai/v1/chat/completions', gatewayAuth, handleChatCompletions)
 router.get('/openai/v1/models', gatewayAuth, handleModelsList)
-router.post('/openai/v1/responses', express.json({ limit: '50mb' }), gatewayAuth, handleResponses)
-router.post('/openai/responses', express.json({ limit: '50mb' }), gatewayAuth, handleResponses)
 
 router.post('/chat-process', [auth, limiter], async (req, res) => {
   console.log(`[chat-process] model=${req.body?.model} chatUuid=${req.body?.chatUuid} clientId=${(req.headers['x-client-id'] as string) || 'default'}`)
@@ -320,7 +307,7 @@ router.post('/conversations/import', auth, async (req, res) => {
 // ---- Codex Account Pool Management ----
 
 // Pool stats overview
-router.get('/codex/pool/stats', adminAuth, async (_req, res) => {
+router.get('/codex/pool/stats', auth, async (_req, res) => {
   try {
     const stats = getPoolStats()
     res.json({ status: 'Success', data: stats })
@@ -330,7 +317,7 @@ router.get('/codex/pool/stats', adminAuth, async (_req, res) => {
 })
 
 // List all accounts (tokens masked)
-router.get('/codex/pool/accounts', adminAuth, async (_req, res) => {
+router.get('/codex/pool/accounts', auth, async (_req, res) => {
   try {
     const accounts = listAccounts()
     res.json({ status: 'Success', data: accounts })
@@ -340,7 +327,7 @@ router.get('/codex/pool/accounts', adminAuth, async (_req, res) => {
 })
 
 // Sync from OpenClaw
-router.post('/codex/pool/sync', adminAuth, async (_req, res) => {
+router.post('/codex/pool/sync', auth, async (_req, res) => {
   try {
     const count = syncFromOpenClaw()
     res.json({ status: 'Success', data: { synced: count } })
@@ -350,7 +337,7 @@ router.post('/codex/pool/sync', adminAuth, async (_req, res) => {
 })
 
 // Remove account
-router.delete('/codex/pool/accounts/:id', adminAuth, async (req, res) => {
+router.delete('/codex/pool/accounts/:id', auth, async (req, res) => {
   try {
     const ok = removeAccount(req.params.id)
     if (!ok) throw new Error('Account not found')
@@ -361,7 +348,7 @@ router.delete('/codex/pool/accounts/:id', adminAuth, async (req, res) => {
 })
 
 // Update account (proxy, status)
-router.patch('/codex/pool/accounts/:id', adminAuth, async (req, res) => {
+router.patch('/codex/pool/accounts/:id', auth, async (req, res) => {
   try {
     const ok = updateAccount(req.params.id, req.body)
     if (!ok) throw new Error('Account not found')
@@ -372,7 +359,7 @@ router.patch('/codex/pool/accounts/:id', adminAuth, async (req, res) => {
 })
 
 // Refresh single account token
-router.post('/codex/pool/accounts/:id/refresh', adminAuth, async (req, res) => {
+router.post('/codex/pool/accounts/:id/refresh', auth, async (req, res) => {
   try {
     const result = await refreshAccount(req.params.id)
     if (!result.success) throw new Error(result.error)
@@ -383,7 +370,7 @@ router.post('/codex/pool/accounts/:id/refresh', adminAuth, async (req, res) => {
 })
 
 // Refresh all account tokens
-router.post('/codex/pool/refresh-all', adminAuth, async (_req, res) => {
+router.post('/codex/pool/refresh-all', auth, async (_req, res) => {
   try {
     const result = await refreshAllAccounts()
     res.json({ status: 'Success', data: result })
@@ -393,7 +380,7 @@ router.post('/codex/pool/refresh-all', adminAuth, async (_req, res) => {
 })
 
 // Start OAuth authorization flow
-router.post('/codex/oauth/start', adminAuth, async (_req, res) => {
+router.post('/codex/oauth/start', auth, async (_req, res) => {
   try {
     const result = await startOAuthFlow()
     res.json({ status: 'Success', data: result })
@@ -440,7 +427,7 @@ router.get('/codex/oauth/callback', async (req, res) => {
 })
 
 // Complete OAuth with manual code paste
-router.post('/codex/oauth/complete', adminAuth, async (req, res) => {
+router.post('/codex/oauth/complete', auth, async (req, res) => {
   try {
     const { code, state, proxy } = req.body
     if (!code || !state) throw new Error('Missing code or state')
@@ -453,7 +440,7 @@ router.post('/codex/oauth/complete', adminAuth, async (req, res) => {
 })
 
 // Query quota for a single account
-router.get('/codex/pool/accounts/:id/quota', adminAuth, async (req, res) => {
+router.get('/codex/pool/accounts/:id/quota', auth, async (req, res) => {
   try {
     const quota = await queryAccountQuota(req.params.id)
     if (!quota) throw new Error('Account not found')
@@ -464,7 +451,7 @@ router.get('/codex/pool/accounts/:id/quota', adminAuth, async (req, res) => {
 })
 
 // Query quota for all accounts
-router.get('/codex/pool/quotas', adminAuth, async (_req, res) => {
+router.get('/codex/pool/quotas', auth, async (_req, res) => {
   try {
     const quotas = await queryAllQuotas()
     res.json({ status: 'Success', data: quotas })
@@ -475,7 +462,7 @@ router.get('/codex/pool/quotas', adminAuth, async (_req, res) => {
 
 // ---- Proxy Management ----
 
-router.get('/codex/proxies', adminAuth, async (_req, res) => {
+router.get('/codex/proxies', auth, async (_req, res) => {
   try {
     res.json({ status: 'Success', data: listProxies() })
   } catch (e: any) {
@@ -483,7 +470,7 @@ router.get('/codex/proxies', adminAuth, async (_req, res) => {
   }
 })
 
-router.post('/codex/proxies', adminAuth, async (req, res) => {
+router.post('/codex/proxies', auth, async (req, res) => {
   try {
     const { name, url } = req.body
     if (!name || !url) throw new Error('name and url required')
@@ -494,7 +481,7 @@ router.post('/codex/proxies', adminAuth, async (req, res) => {
   }
 })
 
-router.patch('/codex/proxies/:id', adminAuth, async (req, res) => {
+router.patch('/codex/proxies/:id', auth, async (req, res) => {
   try {
     const ok = updateProxy(req.params.id, req.body)
     if (!ok) throw new Error('Proxy not found')
@@ -504,7 +491,7 @@ router.patch('/codex/proxies/:id', adminAuth, async (req, res) => {
   }
 })
 
-router.delete('/codex/proxies/:id', adminAuth, async (req, res) => {
+router.delete('/codex/proxies/:id', auth, async (req, res) => {
   try {
     const ok = removeProxy(req.params.id)
     if (!ok) throw new Error('Proxy not found')
@@ -514,7 +501,7 @@ router.delete('/codex/proxies/:id', adminAuth, async (req, res) => {
   }
 })
 
-router.post('/codex/proxies/:id/test', adminAuth, async (req, res) => {
+router.post('/codex/proxies/:id/test', auth, async (req, res) => {
   try {
     const result = await testProxy(req.params.id)
     res.json({ status: 'Success', data: result })
@@ -558,7 +545,7 @@ async function clewdrFetch(path: string, options: any = {}): Promise<any> {
 }
 
 // Get all cookies (accounts)
-router.get('/clewdr/cookies', adminAuth, async (req, res) => {
+router.get('/clewdr/cookies', auth, async (req, res) => {
   try {
     const refresh = req.query.refresh === 'true'
     const data = await clewdrFetch(`/api/cookies${refresh ? '?refresh=true' : ''}`)
@@ -567,7 +554,7 @@ router.get('/clewdr/cookies', adminAuth, async (req, res) => {
 })
 
 // Add a cookie (account) — ClewdR uses /api/cookie (singular) for POST
-router.post('/clewdr/cookies', adminAuth, async (req, res) => {
+router.post('/clewdr/cookies', auth, async (req, res) => {
   try {
     const { cookie, proxy } = req.body
     if (!cookie) throw new Error('cookie is required')
@@ -592,7 +579,7 @@ router.post('/clewdr/cookies', adminAuth, async (req, res) => {
 })
 
 // 批量添加 cookies
-router.post('/clewdr/cookies/batch', adminAuth, async (req, res) => {
+router.post('/clewdr/cookies/batch', auth, async (req, res) => {
   try {
     const { cookies, proxy } = req.body
     if (!Array.isArray(cookies) || cookies.length === 0) {
@@ -631,7 +618,7 @@ router.post('/clewdr/cookies/batch', adminAuth, async (req, res) => {
 })
 
 // Delete a cookie (account) — ClewdR uses /api/cookie (singular) for DELETE
-router.delete('/clewdr/cookies', adminAuth, async (req, res) => {
+router.delete('/clewdr/cookies', auth, async (req, res) => {
   try {
     const { cookie } = req.body
     if (!cookie) throw new Error('cookie is required')
@@ -644,7 +631,7 @@ router.delete('/clewdr/cookies', adminAuth, async (req, res) => {
 })
 
 // Update cookie — ClewdR uses /api/cookie (singular) for PUT
-router.put('/clewdr/cookies', adminAuth, async (req, res) => {
+router.put('/clewdr/cookies', auth, async (req, res) => {
   try {
     await clewdrFetch('/api/cookie', {
       method: 'PUT',
@@ -655,7 +642,7 @@ router.put('/clewdr/cookies', adminAuth, async (req, res) => {
 })
 
 // Get ClewdR config
-router.get('/clewdr/config', adminAuth, async (_req, res) => {
+router.get('/clewdr/config', auth, async (_req, res) => {
   try {
     const data = await clewdrFetch('/api/config')
     res.json({ status: 'Success', data })
@@ -663,7 +650,7 @@ router.get('/clewdr/config', adminAuth, async (_req, res) => {
 })
 
 // Update ClewdR config
-router.post('/clewdr/config', adminAuth, async (req, res) => {
+router.post('/clewdr/config', auth, async (req, res) => {
   try {
     await clewdrFetch('/api/config', {
       method: 'POST',
@@ -674,7 +661,7 @@ router.post('/clewdr/config', adminAuth, async (req, res) => {
 })
 
 // Get available models
-router.get('/clewdr/models', adminAuth, async (_req, res) => {
+router.get('/clewdr/models', auth, async (_req, res) => {
   try {
     const data = await clewdrFetch('/api/models')
     res.json({ status: 'Success', data })
@@ -682,7 +669,7 @@ router.get('/clewdr/models', adminAuth, async (_req, res) => {
 })
 
 // Test a cookie by sending a minimal request
-router.post('/clewdr/test', adminAuth, async (req, res) => {
+router.post('/clewdr/test', auth, async (req, res) => {
   try {
     const apiKey = process.env.CLEWDR_API_KEY || ''
     const testRes = await fetch(`${CLEWDR_ADMIN_URL}/v1/chat/completions`, {
@@ -705,7 +692,7 @@ router.post('/clewdr/test', adminAuth, async (req, res) => {
 })
 
 // Disable a cookie: remove from ClewdR + save to local disabled list
-router.post('/clewdr/cookies/disable', adminAuth, async (req, res) => {
+router.post('/clewdr/cookies/disable', auth, async (req, res) => {
   try {
     const { cookie, proxy } = req.body
     if (!cookie) throw new Error('cookie is required')
@@ -718,7 +705,7 @@ router.post('/clewdr/cookies/disable', adminAuth, async (req, res) => {
 })
 
 // Enable a cookie: remove from disabled list + add back to ClewdR
-router.post('/clewdr/cookies/enable', adminAuth, async (req, res) => {
+router.post('/clewdr/cookies/enable', auth, async (req, res) => {
   try {
     const { cookie } = req.body
     if (!cookie) throw new Error('cookie is required')
@@ -732,14 +719,14 @@ router.post('/clewdr/cookies/enable', adminAuth, async (req, res) => {
 })
 
 // Get disabled cookies list
-router.get('/clewdr/cookies/disabled', adminAuth, async (_req, res) => {
+router.get('/clewdr/cookies/disabled', auth, async (_req, res) => {
   try {
     res.json({ status: 'Success', data: storage.listDisabledCookies() })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
 // ClewdR request logs (proxy to ClewdR API)
-router.get('/clewdr/logs', adminAuth, async (req, res) => {
+router.get('/clewdr/logs', auth, async (req, res) => {
   try {
     const qs = new URLSearchParams(req.query as any).toString()
     const r = await clewdrFetch(`/api/logs?${qs}`, { method: 'GET' })
@@ -748,7 +735,7 @@ router.get('/clewdr/logs', adminAuth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.get('/clewdr/logs/stats', adminAuth, async (req, res) => {
+router.get('/clewdr/logs/stats', auth, async (req, res) => {
   try {
     const qs = new URLSearchParams(req.query as any).toString()
     const r = await clewdrFetch(`/api/logs/stats?${qs}`, { method: 'GET' })
@@ -761,17 +748,14 @@ router.get('/clewdr/logs/stats', adminAuth, async (req, res) => {
 
 const KIRO_GW_URL = process.env.KIRO_GW_BASE_URL || 'http://43.165.172.3:8000'
 const KIRO_GW_KEY = process.env.KIRO_GW_API_KEY || ''
-const KIRO_GW_ADMIN_KEY = process.env.KIRO_GW_ADMIN_KEY || KIRO_GW_KEY
 
 async function kiroGwFetch(path: string, options: any = {}): Promise<any> {
   const url = `${KIRO_GW_URL}${path}`
-  // Admin endpoints (/v1/pool/*) need admin key; others need chat key.
-  const key = path.startsWith('/v1/pool') ? KIRO_GW_ADMIN_KEY : KIRO_GW_KEY
   const res = await fetch(url, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'Authorization': `Bearer ${key}`,
+      'Authorization': `Bearer ${KIRO_GW_KEY}`,
       ...options.headers,
     },
   })
@@ -784,67 +768,42 @@ async function kiroGwFetch(path: string, options: any = {}): Promise<any> {
   return res.text()
 }
 
-router.get('/kiro/pool-status', adminAuth, async (_req, res) => {
+router.get('/kiro/pool-status', auth, async (_req, res) => {
   try {
     const data = await kiroGwFetch('/v1/pool/status')
     res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.get('/kiro/usage', adminAuth, async (req, res) => {
-  try {
-    const qs = req.query.refresh ? '?refresh=1' : ''
-    const data = await kiroGwFetch(`/v1/pool/usage${qs}`)
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.post('/kiro/refresh-quotas', adminAuth, async (_req, res) => {
-  try {
-    const data = await kiroGwFetch('/v1/pool/refresh-quotas', { method: 'POST' })
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.get('/kiro/history', adminAuth, async (req, res) => {
-  try {
-    const hours = req.query.hours ? `?hours=${encodeURIComponent(String(req.query.hours))}` : ''
-    const accountId = req.query.account_id ? `${hours ? '&' : '?'}account_id=${encodeURIComponent(String(req.query.account_id))}` : ''
-    const bucket = req.query.bucket ? `${(hours || accountId) ? '&' : '?'}bucket=${encodeURIComponent(String(req.query.bucket))}` : ''
-    const data = await kiroGwFetch(`/v1/pool/history${hours}${accountId}${bucket}`)
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.get('/kiro/sessions', adminAuth, async (_req, res) => {
+router.get('/kiro/sessions', auth, async (_req, res) => {
   try {
     const data = await kiroGwFetch('/v1/pool/sessions')
     res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Success', data: [] }) }
 })
 
-router.post('/kiro/accounts/:id/disable', adminAuth, async (req, res) => {
+router.post('/kiro/accounts/:id/disable', auth, async (req, res) => {
   try {
     await kiroGwFetch(`/v1/pool/accounts/${req.params.id}/disable`, { method: 'POST' })
     res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/kiro/accounts/:id/enable', adminAuth, async (req, res) => {
+router.post('/kiro/accounts/:id/enable', auth, async (req, res) => {
   try {
     await kiroGwFetch(`/v1/pool/accounts/${req.params.id}/enable`, { method: 'POST' })
     res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/kiro/test', adminAuth, async (_req, res) => {
+router.post('/kiro/test', auth, async (_req, res) => {
   try {
     const data = await kiroGwFetch('/v1/models')
     res.json({ status: 'Success', data: { ok: true, models: data?.data?.length || 0 } })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/kiro/accounts/upload', adminAuth, async (req, res) => {
+router.post('/kiro/accounts/upload', auth, async (req, res) => {
   try {
     const { filename, data: fileData, label } = req.body
     if (!filename || !fileData) throw new Error('filename and data (base64) are required')
@@ -876,7 +835,7 @@ router.post('/kiro/accounts/upload', adminAuth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.delete('/kiro/accounts/:id', adminAuth, async (req, res) => {
+router.delete('/kiro/accounts/:id', auth, async (req, res) => {
   try {
     const r = await fetch(`${KIRO_GW_URL}/v1/pool/accounts/${req.params.id}`, {
       method: 'DELETE',
@@ -887,68 +846,16 @@ router.delete('/kiro/accounts/:id', adminAuth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/kiro/accounts/:id/test', adminAuth, async (req, res) => {
+router.post('/kiro/accounts/:id/test', auth, async (req, res) => {
   try {
     const data = await kiroGwFetch(`/v1/pool/accounts/${req.params.id}/test`, { method: 'POST' })
     res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.patch('/kiro/accounts/:id/proxy', adminAuth, async (req, res) => {
-  try {
-    const r = await fetch(`${KIRO_GW_URL}/v1/pool/accounts/${req.params.id}/proxy`, {
-      method: 'PATCH',
-      headers: { 'Authorization': `Bearer ${KIRO_GW_ADMIN_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proxy_url: req.body.proxy_url ?? null }),
-    })
-    if (!r.ok) throw new Error(`KiroGW ${r.status}: ${(await r.text()).slice(0, 200)}`)
-    const data = await r.json()
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-// ─── Kiro Account Login (via login server) ─────────────────────────
-
-router.post('/kiro/login/start', adminAuth, async (req, res) => {
-  try {
-    const label = req.body?.label || ''
-    const qs = label ? `?label=${encodeURIComponent(label)}` : ''
-    const data = await kiroGwFetch(`/v1/pool/login/start${qs}`, { method: 'POST' })
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.get('/kiro/login/list', adminAuth, async (_req, res) => {
-  try {
-    const data = await kiroGwFetch('/v1/pool/login')
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Success', data: { sessions: [] } }) }
-})
-
-router.get('/kiro/login/:label', adminAuth, async (req, res) => {
-  try {
-    const data = await kiroGwFetch(`/v1/pool/login/${encodeURIComponent(req.params.label)}`)
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.post('/kiro/login/:label/complete', adminAuth, async (req, res) => {
-  try {
-    const data = await kiroGwFetch(`/v1/pool/login/${encodeURIComponent(req.params.label)}/complete`, { method: 'POST' })
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.delete('/kiro/login/:label', adminAuth, async (req, res) => {
-  try {
-    await kiroGwFetch(`/v1/pool/login/${encodeURIComponent(req.params.label)}`, { method: 'DELETE' })
-    res.json({ status: 'Success' })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
 // ─── Request Logs ──────────────────────────────────────────────────
 
-router.get('/log/list', adminAuth, async (req, res) => {
+router.get('/log/list', auth, async (req, res) => {
   try {
     const result = storage.queryRequestLogs({
       page: Number(req.query.page) || 1,
@@ -962,20 +869,20 @@ router.get('/log/list', adminAuth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.get('/log/stats', adminAuth, async (req, res) => {
+router.get('/log/stats', auth, async (req, res) => {
   try {
     const stats = storage.getLogStats(req.query.date_from as string, req.query.date_to as string)
     res.json({ status: 'Success', data: stats })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.get('/log/settings', adminAuth, async (_req, res) => {
+router.get('/log/settings', auth, async (_req, res) => {
   try {
     res.json({ status: 'Success', data: { retention_days: storage.getLogSetting('retention_days') } })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/log/settings', adminAuth, async (req, res) => {
+router.post('/log/settings', auth, async (req, res) => {
   try {
     const { retention_days } = req.body
     if (retention_days) {
@@ -1012,35 +919,35 @@ async function geminiGwFetch(path: string, options: any = {}): Promise<any> {
   return res.text()
 }
 
-router.get('/gemini/pool-status', adminAuth, async (_req, res) => {
+router.get('/gemini/pool-status', auth, async (_req, res) => {
   try {
     const data = await geminiGwFetch('/api/pool')
     res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/gemini/pool/add', adminAuth, async (req, res) => {
+router.post('/gemini/pool/add', auth, async (req, res) => {
   try {
     const data = await geminiGwFetch('/api/pool/add', { method: 'POST', body: JSON.stringify(req.body) })
     res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/gemini/pool/:label/disable', adminAuth, async (req, res) => {
+router.post('/gemini/pool/:label/disable', auth, async (req, res) => {
   try {
     await geminiGwFetch(`/api/pool/${req.params.label}/disable`, { method: 'POST' })
     res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/gemini/pool/:label/enable', adminAuth, async (req, res) => {
+router.post('/gemini/pool/:label/enable', auth, async (req, res) => {
   try {
     await geminiGwFetch(`/api/pool/${req.params.label}/enable`, { method: 'POST' })
     res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.delete('/gemini/pool/:label', adminAuth, async (req, res) => {
+router.delete('/gemini/pool/:label', auth, async (req, res) => {
   try {
     const r = await fetch(`${GEMINI_GW_URL}/api/pool/${req.params.label}`, {
       method: 'DELETE', headers: { 'Authorization': `Bearer ${GEMINI_GW_KEY}` },
@@ -1050,28 +957,28 @@ router.delete('/gemini/pool/:label', adminAuth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/gemini/pool/:label/test', adminAuth, async (req, res) => {
+router.post('/gemini/pool/:label/test', auth, async (req, res) => {
   try {
     const data = await geminiGwFetch(`/api/pool/${req.params.label}/test`, { method: 'POST' })
     res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/gemini/pool/:label/proxy', adminAuth, async (req, res) => {
+router.post('/gemini/pool/:label/proxy', auth, async (req, res) => {
   try {
     const data = await geminiGwFetch(`/api/pool/${req.params.label}/proxy`, { method: 'POST', body: JSON.stringify(req.body) })
     res.json({ status: 'Success', data })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.post('/gemini/test', adminAuth, async (_req, res) => {
+router.post('/gemini/test', auth, async (_req, res) => {
   try {
     const data = await geminiGwFetch('/v1/models')
     res.json({ status: 'Success', data: { ok: true, models: data?.data?.length || 0 } })
   } catch (e: any) { res.json({ status: 'Fail', data: { ok: false, message: e.message } }) }
 })
 
-router.get('/gemini/logs', adminAuth, async (req, res) => {
+router.get('/gemini/logs', auth, async (req, res) => {
   try {
     const qs = new URLSearchParams()
     for (const [k, v] of Object.entries(req.query)) { if (v) qs.set(k, String(v)) }
@@ -1080,7 +987,7 @@ router.get('/gemini/logs', adminAuth, async (req, res) => {
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 
-router.get('/gemini/logs/stats', adminAuth, async (_req, res) => {
+router.get('/gemini/logs/stats', auth, async (_req, res) => {
   try {
     const data = await geminiGwFetch('/api/logs/stats')
     res.json({ status: 'Success', data })

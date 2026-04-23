@@ -16,7 +16,7 @@ const distincts = ref<any>({})
 const filter = ref({
   date_from: '', date_to: '', model: '', session_id: '', api_key_hash: '',
   client_type: '', cookie_short: '', status: '', has_tools: '', is_stream: '',
-  min_prompt_tokens: '', min_completion_tokens: '', search: '', search_scope: 'all',
+  min_prompt_tokens: '', min_completion_tokens: '', search: '',
 })
 
 const autoRefresh = ref(false)
@@ -62,7 +62,7 @@ function closeDetail() { showDetail.value = false; detail.value = null }
 
 function applyFilters() { page.value = 1; load(); loadStats() }
 function resetFilters() {
-  filter.value = { date_from: '', date_to: '', model: '', session_id: '', api_key_hash: '', client_type: '', cookie_short: '', status: '', has_tools: '', is_stream: '', min_prompt_tokens: '', min_completion_tokens: '', search: '', search_scope: 'all' }
+  filter.value = { date_from: '', date_to: '', model: '', session_id: '', api_key_hash: '', client_type: '', cookie_short: '', status: '', has_tools: '', is_stream: '', min_prompt_tokens: '', min_completion_tokens: '', search: '' }
   applyFilters()
 }
 function switchSource(s: Source) { source.value = s; page.value = 1; resetFilters() }
@@ -78,41 +78,6 @@ function setDateShortcut(key: '1h' | '6h' | '24h' | '7d' | '') {
 
 function goPage(p: number) { if (p < 1) return; page.value = p; load() }
 const totalPages = computed(() => Math.max(1, Math.ceil(total.value / pageSize.value)))
-
-// All user messages from the request body — shows raw user input for forensics
-const allUserMessages = computed<string[]>(() => {
-  const d: any = detail.value
-  if (!d) return []
-  let body: any = d.request_body
-  if (typeof body === 'string') { try { body = JSON.parse(body) } catch { return [] } }
-  if (!body) return []
-  const msgs: any[] = Array.isArray(body.messages) ? body.messages : []
-  const out: string[] = []
-  for (const m of msgs) {
-    if (m?.role !== 'user') continue
-    const c = m.content
-    if (typeof c === 'string') { out.push(c); continue }
-    if (Array.isArray(c)) {
-      const parts: string[] = []
-      for (const b of c) {
-        if (!b || typeof b !== 'object') continue
-        if (b.type === 'text' && typeof b.text === 'string') parts.push(b.text)
-        else if (b.type === 'tool_result') {
-          const tc = b.content
-          if (typeof tc === 'string') parts.push(`[tool_result]\n${tc}`)
-          else if (Array.isArray(tc)) {
-            const tparts = tc.filter((x: any) => x?.type === 'text' && typeof x.text === 'string').map((x: any) => x.text)
-            parts.push(`[tool_result]\n${tparts.join('\n')}`)
-          } else parts.push('[tool_result]')
-        }
-        else if (b.type === 'image') parts.push('[image]')
-        else if (b.type === 'document') parts.push('[document]')
-      }
-      if (parts.length) out.push(parts.join('\n'))
-    }
-  }
-  return out
-})
 
 function fmtTime(iso: string) { if (!iso) return ''; return new Date(iso).toLocaleString('zh-CN', { hour12: false }) }
 function fmtRelative(iso: string) {
@@ -224,14 +189,7 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
       </div>
 
       <div class="grid grid-cols-6 gap-2">
-        <div class="col-span-2 flex gap-1">
-          <select v-model="filter.search_scope" class="text-xs border border-[#e5e7eb] rounded-md px-2 py-1.5 bg-white w-20 flex-shrink-0" @change="applyFilters">
-            <option value="all">全部</option>
-            <option value="input">仅输入</option>
-            <option value="output">仅输出</option>
-          </select>
-          <input v-model="filter.search" :placeholder="filter.search_scope === 'output' ? '搜索 AI 回复内容' : (filter.search_scope === 'input' ? '搜索用户输入或请求体' : '全文搜索（输入+输出）')" class="flex-1 text-sm border border-[#e5e7eb] rounded-md px-3 py-1.5 focus:outline-none focus:border-[#18181b]" @keyup.enter="applyFilters" />
-        </div>
+        <input v-model="filter.search" placeholder="全文搜索（含敏感词检测）" class="col-span-2 text-sm border border-[#e5e7eb] rounded-md px-3 py-1.5 focus:outline-none focus:border-[#18181b]" @keyup.enter="applyFilters" />
         <select v-model="filter.model" class="text-sm border border-[#e5e7eb] rounded-md px-2 py-1.5" @change="applyFilters">
           <option value="">全部模型</option>
           <option v-for="m in (source === 'clewdr' ? distincts.clewdr_models : distincts.oai_models) || []" :key="m" :value="m">{{ m }}</option>
@@ -282,7 +240,7 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
             <th class="px-3 py-2 text-left font-medium">客户端</th>
             <th class="px-3 py-2 text-left font-medium">模型</th>
             <th class="px-3 py-2 text-left font-medium">用户</th>
-            <th class="px-3 py-2 text-left font-medium w-64">最后一条 user</th>
+            <th class="px-3 py-2 text-left font-medium w-64">首条消息</th>
             <th class="px-3 py-2 text-left font-medium w-64">响应预览</th>
             <th class="px-3 py-2 text-right font-medium">Tokens</th>
             <th class="px-3 py-2 text-right font-medium">缓存</th>
@@ -438,24 +396,8 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
                 </div>
               </div>
 
-              <div v-if="allUserMessages.length">
-                <div class="text-xs font-medium text-[#71717a] uppercase mb-2">用户输入 ({{ allUserMessages.length }} 条，本轮最后一条触发回复)</div>
-                <div class="space-y-2">
-                  <div
-                    v-for="(um, i) in allUserMessages"
-                    :key="i"
-                    class="border rounded"
-                    :class="i === allUserMessages.length - 1 ? 'border-[#f59e0b] bg-[#fffbeb]' : 'border-[#e5e7eb] bg-[#fafafa]'"
-                  >
-                    <div class="px-3 py-1 text-[10px] text-[#71717a] border-b" :class="i === allUserMessages.length - 1 ? 'border-[#f59e0b] bg-[#fef3c7]' : 'border-[#e5e7eb]'">
-                      user #{{ i + 1 }}<span v-if="i === allUserMessages.length - 1" class="ml-2 text-[#b45309]">← 触发本轮回复</span>
-                    </div>
-                    <pre class="text-xs p-3 max-h-48 overflow-auto whitespace-pre-wrap text-[#18181b]">{{ um }}</pre>
-                  </div>
-                </div>
-              </div>
-              <div v-else-if="detail.first_user_message">
-                <div class="text-xs font-medium text-[#71717a] uppercase mb-2">最后一条用户消息</div>
+              <div v-if="detail.first_user_message">
+                <div class="text-xs font-medium text-[#71717a] uppercase mb-2">首条用户消息</div>
                 <pre class="text-xs bg-[#fafafa] border border-[#e5e7eb] rounded p-3 max-h-48 overflow-auto whitespace-pre-wrap">{{ detail.first_user_message }}</pre>
               </div>
               <div v-if="detail.system_prompt_head">

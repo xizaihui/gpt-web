@@ -37,33 +37,14 @@ const TOKEN_REFRESH_BUFFER = 30 * 60 * 1000 // refresh 30 min before expiry
 // ── Proxy-aware fetch ──
 // Supports http://, https://, socks5:// (via undici ProxyAgent)
 // For socks5, undici ProxyAgent handles it natively in v8+
-// ProxyAgent reuse: creating a new ProxyAgent per request burns a TLS+SOCKS
-// handshake every time (200-500ms). Cache one per proxyUrl so the underlying
-// connection pool gets reused.
-const _proxyAgentCache = new Map<string, ProxyAgent>()
-
-function _getProxyAgent(proxyUrl: string): ProxyAgent {
-  let agent = _proxyAgentCache.get(proxyUrl)
-  if (!agent) {
-    agent = new ProxyAgent({
-      uri: proxyUrl,
-      // Keep-alive so repeated requests through the same proxy reuse sockets.
-      keepAliveTimeout: 30_000,
-      keepAliveMaxTimeout: 60_000,
-      connections: 128,
-    } as any)
-    _proxyAgentCache.set(proxyUrl, agent)
-  }
-  return agent
-}
-
 export function proxyFetch(url: string | URL, init?: RequestInit & { proxy?: string }): Promise<Response> {
   const proxyUrl = init?.proxy
   if (!proxyUrl) {
     return fetch(url, init as any)
   }
-
-  const dispatcher = _getProxyAgent(proxyUrl)
+  
+  // Use undici fetch with ProxyAgent for proxied requests
+  const dispatcher = new ProxyAgent({ uri: proxyUrl })
   const { proxy: _, ...rest } = init || {}
   return undiciFetch(url as any, { ...rest, dispatcher } as any) as unknown as Promise<Response>
 }
@@ -239,117 +220,20 @@ function extractAccountInfo(accessToken: string): {
   }
 }
 
-// ── Storage (in-memory with debounced atomic flush) ──
-//
-// Rationale: every request used to loadPool()+savePool() which meant
-// readFileSync/writeFileSync per request. Under concurrency that
-// (a) serializes the event loop on disk I/O, and
-// (b) races: writeFileSync is NOT atomic, so two concurrent flushers could
-//    leave a truncated or corrupt JSON on disk.
-//
-// New model:
-//   * loadPool() returns a live reference to the in-memory store loaded on
-//     first use (so existing callers that mutate+savePool() still work).
-//   * savePool() marks dirty and schedules a debounced flush (250ms).
-//   * The flush writes to a temp file + rename() for atomicity.
-//   * A safety interval flush runs every 5s in case the debounce is stalled.
-//   * SIGTERM/SIGINT/beforeExit force a final synchronous flush so we don't
-//     lose round-robin index or tokenStats across pm2 restarts.
-let _memPool: PoolStore | null = null
-let _poolDirty = false
-let _flushTimer: NodeJS.Timeout | null = null
-let _flushInflight: Promise<void> | null = null
-const FLUSH_DEBOUNCE_MS = 250
-const FLUSH_SAFETY_INTERVAL_MS = 5000
-
-function _loadPoolFromDisk(): PoolStore {
+// ── Storage ──
+function loadPool(): PoolStore {
   try {
     if (fs.existsSync(POOL_FILE)) {
       return JSON.parse(fs.readFileSync(POOL_FILE, 'utf-8'))
     }
-  } catch (e: any) {
-    console.error(`[codex-pool] load failed, starting empty: ${e?.message || e}`)
-  }
+  } catch {}
   return { accounts: [], lastUpdated: 0, roundRobinIndex: 0 }
 }
 
-// In PM2 cluster mode multiple workers would each try to flush this file.
-// That's a disk-level race: `writeFile(tmp)+rename()` is atomic per-call but
-// N workers racing can still overwrite each other's roundRobinIndex.
-//
-// Strategy: only the worker with NODE_APP_INSTANCE=0 writes to disk. The
-// others keep their in-memory pool (useful for reads) but don't persist.
-// Downside: rrIdx / error counts / token updates from non-primary workers are
-// ephemeral. For chatgpt-web that's acceptable because:
-//   * rrIdx just needs to drift forward; losing a step is fine.
-//   * refreshAccount() / addAccount() are admin actions going through a
-//     sticky session, not load-balanced, so they usually hit worker 0 anyway.
-//   * recordError is best-effort already.
-// If we ever need true multi-writer we'll move this to SQLite or Redis.
-const _isPrimaryWorker = (process.env.NODE_APP_INSTANCE === undefined || process.env.NODE_APP_INSTANCE === '0')
-
-async function _flushPoolToDisk(): Promise<void> {
-  if (!_memPool || !_isPrimaryWorker) return
-  // Snapshot under a microtask to avoid concurrent mutation during JSON.stringify.
-  const snapshot = JSON.parse(JSON.stringify(_memPool)) as PoolStore
-  snapshot.lastUpdated = Date.now()
-  const tmp = `${POOL_FILE}.tmp.${process.pid}.${Date.now()}`
-  try {
-    await fs.promises.mkdir(DATA_DIR, { recursive: true })
-    await fs.promises.writeFile(tmp, JSON.stringify(snapshot, null, 2))
-    await fs.promises.rename(tmp, POOL_FILE)
-  } catch (e: any) {
-    console.error(`[codex-pool] flush failed: ${e?.message || e}`)
-    try { await fs.promises.unlink(tmp) } catch {}
-  }
-}
-
-function _scheduleFlush(): void {
-  if (_flushTimer) return
-  _flushTimer = setTimeout(() => {
-    _flushTimer = null
-    if (!_poolDirty) return
-    _poolDirty = false
-    _flushInflight = _flushPoolToDisk().finally(() => { _flushInflight = null })
-  }, FLUSH_DEBOUNCE_MS)
-}
-
-// Safety net: even if somehow dirty never got picked up (e.g. unref'd timer),
-// make sure we persist at worst every 5s.
-setInterval(() => {
-  if (_poolDirty && !_flushTimer) _scheduleFlush()
-}, FLUSH_SAFETY_INTERVAL_MS).unref()
-
-function _flushPoolSync(): void {
-  if (!_memPool || !_isPrimaryWorker) return
-  try {
-    const snapshot = JSON.parse(JSON.stringify(_memPool)) as PoolStore
-    snapshot.lastUpdated = Date.now()
-    fs.mkdirSync(DATA_DIR, { recursive: true })
-    const tmp = `${POOL_FILE}.tmp.${process.pid}.${Date.now()}`
-    fs.writeFileSync(tmp, JSON.stringify(snapshot, null, 2))
-    fs.renameSync(tmp, POOL_FILE)
-  } catch (e: any) {
-    console.error(`[codex-pool] sync flush failed: ${e?.message || e}`)
-  }
-}
-
-// Force a sync write on shutdown so round-robin pointer etc. survive restarts.
-;['SIGTERM', 'SIGINT', 'beforeExit'].forEach(sig => {
-  process.on(sig as any, () => { if (_poolDirty) _flushPoolSync() })
-})
-
-function loadPool(): PoolStore {
-  if (!_memPool) _memPool = _loadPoolFromDisk()
-  return _memPool
-}
-
 function savePool(pool: PoolStore): void {
-  // Treat the passed argument as authoritative in case a caller built a fresh
-  // object; in practice callers mutate the reference returned by loadPool().
-  _memPool = pool
-  _poolDirty = true
-  _scheduleFlush()
+  fs.mkdirSync(DATA_DIR, { recursive: true })
+  pool.lastUpdated = Date.now()
+  fs.writeFileSync(POOL_FILE, JSON.stringify(pool, null, 2))
 }
 
 // ── Token Refresh ──

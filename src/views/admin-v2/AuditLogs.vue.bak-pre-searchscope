@@ -16,7 +16,7 @@ const distincts = ref<any>({})
 const filter = ref({
   date_from: '', date_to: '', model: '', session_id: '', api_key_hash: '',
   client_type: '', cookie_short: '', status: '', has_tools: '', is_stream: '',
-  min_prompt_tokens: '', min_completion_tokens: '', search: '', search_scope: 'all',
+  min_prompt_tokens: '', min_completion_tokens: '', search: '',
 })
 
 const autoRefresh = ref(false)
@@ -62,7 +62,7 @@ function closeDetail() { showDetail.value = false; detail.value = null }
 
 function applyFilters() { page.value = 1; load(); loadStats() }
 function resetFilters() {
-  filter.value = { date_from: '', date_to: '', model: '', session_id: '', api_key_hash: '', client_type: '', cookie_short: '', status: '', has_tools: '', is_stream: '', min_prompt_tokens: '', min_completion_tokens: '', search: '', search_scope: 'all' }
+  filter.value = { date_from: '', date_to: '', model: '', session_id: '', api_key_hash: '', client_type: '', cookie_short: '', status: '', has_tools: '', is_stream: '', min_prompt_tokens: '', min_completion_tokens: '', search: '' }
   applyFilters()
 }
 function switchSource(s: Source) { source.value = s; page.value = 1; resetFilters() }
@@ -224,14 +224,7 @@ onUnmounted(() => { if (refreshTimer) clearInterval(refreshTimer) })
       </div>
 
       <div class="grid grid-cols-6 gap-2">
-        <div class="col-span-2 flex gap-1">
-          <select v-model="filter.search_scope" class="text-xs border border-[#e5e7eb] rounded-md px-2 py-1.5 bg-white w-20 flex-shrink-0" @change="applyFilters">
-            <option value="all">全部</option>
-            <option value="input">仅输入</option>
-            <option value="output">仅输出</option>
-          </select>
-          <input v-model="filter.search" :placeholder="filter.search_scope === 'output' ? '搜索 AI 回复内容' : (filter.search_scope === 'input' ? '搜索用户输入或请求体' : '全文搜索（输入+输出）')" class="flex-1 text-sm border border-[#e5e7eb] rounded-md px-3 py-1.5 focus:outline-none focus:border-[#18181b]" @keyup.enter="applyFilters" />
-        </div>
+        <input v-model="filter.search" placeholder="全文搜索（含敏感词检测）" class="col-span-2 text-sm border border-[#e5e7eb] rounded-md px-3 py-1.5 focus:outline-none focus:border-[#18181b]" @keyup.enter="applyFilters" />
         <select v-model="filter.model" class="text-sm border border-[#e5e7eb] rounded-md px-2 py-1.5" @change="applyFilters">
           <option value="">全部模型</option>
           <option v-for="m in (source === 'clewdr' ? distincts.clewdr_models : distincts.oai_models) || []" :key="m" :value="m">{{ m }}</option>

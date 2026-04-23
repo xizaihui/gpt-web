@@ -1,0 +1,300 @@
+import type { Request, Response } from "express"
+import { Pool } from "pg"
+import fs from "fs"
+
+let pool: Pool | null = null
+
+function getPool(): Pool {
+  if (pool) return pool
+  const url = process.env.AUDIT_LOG_PG_URL || ""
+  const caPath = process.env.AUDIT_LOG_CA_PATH || ""
+  if (!url) throw new Error("AUDIT_LOG_PG_URL not configured")
+  let ca: Buffer | undefined
+  if (caPath) {
+    try { ca = fs.readFileSync(caPath) } catch {}
+  }
+  pool = new Pool({
+    connectionString: url,
+    ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false },
+    max: 4,
+  })
+  return pool
+}
+
+const CLEWDR_LIST_COLUMNS = `
+  id, created_at, request_id, session_id, api_key_hash, client_ip, user_agent, client_type,
+  endpoint, model, status_code, duration_ms, error_msg,
+  is_stream, has_tools, tool_count, stop_reason,
+  prompt_tokens, completion_tokens, cache_read_tokens, cache_write_tokens,
+  request_size_bytes, response_size_bytes, request_truncated, response_truncated,
+  cookie_short, first_user_message, system_prompt_head,
+  CASE WHEN length(response_text) > 300 THEN left(response_text, 300) || '...' ELSE response_text END AS response_preview
+`
+
+const OAI_LIST_COLUMNS = `
+  id, created_at, request_id, session_id, api_key_hash, client_ip, user_agent, client_type,
+  endpoint, model, status_code, duration_ms, error_msg,
+  is_stream, has_tools, tool_count, finish_reason_norm AS stop_reason,
+  prompt_tokens, completion_tokens, cached_tokens AS cache_read_tokens, cache_write_tokens,
+  request_size_bytes, response_size_bytes, request_truncated, response_truncated,
+  first_user_message, system_prompt_head,
+  CASE WHEN length(response_text) > 300 THEN left(response_text, 300) || '...' ELSE response_text END AS response_preview
+`
+
+function buildWhereClause(q: any, source: "clewdr" | "oai") {
+  const conditions: string[] = []
+  const values: any[] = []
+  let idx = 1
+
+  if (q.date_from) {
+    conditions.push(`created_at >= $${idx++}`)
+    values.push(q.date_from)
+  }
+  if (q.date_to) {
+    conditions.push(`created_at <= $${idx++}`)
+    values.push(q.date_to)
+  }
+  if (q.model) {
+    conditions.push(`model = $${idx++}`)
+    values.push(q.model)
+  }
+  if (q.session_id) {
+    conditions.push(`session_id = $${idx++}`)
+    values.push(q.session_id)
+  }
+  if (q.api_key_hash) {
+    conditions.push(`api_key_hash = $${idx++}`)
+    values.push(q.api_key_hash)
+  }
+  if (q.client_type) {
+    conditions.push(`client_type = $${idx++}`)
+    values.push(q.client_type)
+  }
+  if (q.status === "error") {
+    conditions.push(`status_code >= 400`)
+  } else if (q.status === "success") {
+    conditions.push(`status_code < 400`)
+  }
+  if (q.has_tools === "true") {
+    conditions.push(`has_tools = TRUE`)
+  }
+  if (q.is_stream === "true") {
+    conditions.push(`is_stream = TRUE`)
+  } else if (q.is_stream === "false") {
+    conditions.push(`is_stream = FALSE`)
+  }
+  if (q.min_prompt_tokens) {
+    conditions.push(`prompt_tokens >= $${idx++}`)
+    values.push(parseInt(q.min_prompt_tokens, 10))
+  }
+  if (q.min_completion_tokens) {
+    conditions.push(`completion_tokens >= $${idx++}`)
+    values.push(parseInt(q.min_completion_tokens, 10))
+  }
+  if (q.cookie_short) {
+    conditions.push(`cookie_short = $${idx++}`)
+    values.push(q.cookie_short)
+  }
+  if (q.search) {
+    conditions.push(`(response_text ILIKE $${idx} OR first_user_message ILIKE $${idx})`)
+    values.push(`%${q.search}%`)
+    idx++
+  }
+
+  const where = conditions.length ? "WHERE " + conditions.join(" AND ") : ""
+  return { where, values, nextIdx: idx }
+}
+
+// ── Clewdr logs list ──────────────────────────────
+export async function handleClewdrList(req: Request, res: Response) {
+  try {
+    const q = req.query as any
+    const page = Math.max(1, parseInt(q.page || "1", 10))
+    const pageSize = Math.min(100, Math.max(1, parseInt(q.pageSize || "30", 10)))
+    const offset = (page - 1) * pageSize
+    const { where, values, nextIdx } = buildWhereClause(q, "clewdr")
+    const pg = getPool()
+
+    const countSql = `SELECT count(*)::int AS n FROM clewdr_logs ${where}`
+    const listSql = `SELECT ${CLEWDR_LIST_COLUMNS} FROM clewdr_logs ${where} ORDER BY created_at DESC LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`
+
+    const [countRes, listRes] = await Promise.all([
+      pg.query(countSql, values),
+      pg.query(listSql, [...values, pageSize, offset]),
+    ])
+
+    res.json({
+      status: "Success",
+      data: {
+        total: countRes.rows[0]?.n || 0,
+        page,
+        pageSize,
+        data: listRes.rows,
+      },
+    })
+  } catch (e: any) {
+    console.error(`[audit-api] clewdr list failed:`, e)
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+// ── Clewdr log detail ─────────────────────────────
+export async function handleClewdrDetail(req: Request, res: Response) {
+  try {
+    const id = parseInt(req.params.id, 10)
+    if (!id || isNaN(id)) return res.status(400).json({ status: "Fail", message: "Invalid id" })
+    const pg = getPool()
+    const r = await pg.query(`SELECT * FROM clewdr_logs WHERE id = $1`, [id])
+    if (r.rows.length === 0) return res.status(404).json({ status: "Fail", message: "Not found" })
+    res.json({ status: "Success", data: r.rows[0] })
+  } catch (e: any) {
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+// ── OAI logs list ─────────────────────────────────
+export async function handleOaiList(req: Request, res: Response) {
+  try {
+    const q = req.query as any
+    const page = Math.max(1, parseInt(q.page || "1", 10))
+    const pageSize = Math.min(100, Math.max(1, parseInt(q.pageSize || "30", 10)))
+    const offset = (page - 1) * pageSize
+    const { where, values, nextIdx } = buildWhereClause(q, "oai")
+    const pg = getPool()
+
+    const countSql = `SELECT count(*)::int AS n FROM oai_logs ${where}`
+    const listSql = `SELECT ${OAI_LIST_COLUMNS} FROM oai_logs ${where} ORDER BY created_at DESC LIMIT $${nextIdx} OFFSET $${nextIdx + 1}`
+
+    const [countRes, listRes] = await Promise.all([
+      pg.query(countSql, values),
+      pg.query(listSql, [...values, pageSize, offset]),
+    ])
+
+    res.json({
+      status: "Success",
+      data: {
+        total: countRes.rows[0]?.n || 0,
+        page,
+        pageSize,
+        data: listRes.rows,
+      },
+    })
+  } catch (e: any) {
+    console.error(`[audit-api] oai list failed:`, e)
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+// ── OAI log detail ────────────────────────────────
+export async function handleOaiDetail(req: Request, res: Response) {
+  try {
+    const id = parseInt(req.params.id, 10)
+    if (!id || isNaN(id)) return res.status(400).json({ status: "Fail", message: "Invalid id" })
+    const pg = getPool()
+    const r = await pg.query(`SELECT * FROM oai_logs WHERE id = $1`, [id])
+    if (r.rows.length === 0) return res.status(404).json({ status: "Fail", message: "Not found" })
+    res.json({ status: "Success", data: r.rows[0] })
+  } catch (e: any) {
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+// ── Stats: 24h dashboard cards + model/client top ─
+export async function handleStats(_req: Request, res: Response) {
+  try {
+    const pg = getPool()
+    const [overview, models, clients] = await Promise.all([
+      pg.query(`SELECT * FROM v_stats_24h`),
+      pg.query(`SELECT * FROM v_model_top_24h LIMIT 10`),
+      pg.query(`SELECT * FROM v_client_top_24h LIMIT 10`),
+    ])
+    res.json({
+      status: "Success",
+      data: {
+        overview: overview.rows,
+        top_models: models.rows,
+        top_clients: clients.rows,
+      },
+    })
+  } catch (e: any) {
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+// ── Distinct values for filter dropdowns ──────────
+export async function handleDistincts(_req: Request, res: Response) {
+  try {
+    const pg = getPool()
+    const sql = `
+      SELECT 'clewdr_models' AS k, array_agg(DISTINCT model ORDER BY model) AS v
+        FROM clewdr_logs WHERE model IS NOT NULL AND created_at > now() - interval '30 days'
+      UNION ALL
+      SELECT 'oai_models',         array_agg(DISTINCT model ORDER BY model)
+        FROM oai_logs    WHERE model IS NOT NULL AND created_at > now() - interval '30 days'
+      UNION ALL
+      SELECT 'clewdr_client_types', array_agg(DISTINCT client_type ORDER BY client_type)
+        FROM clewdr_logs WHERE client_type IS NOT NULL AND created_at > now() - interval '30 days'
+      UNION ALL
+      SELECT 'oai_client_types',    array_agg(DISTINCT client_type ORDER BY client_type)
+        FROM oai_logs    WHERE client_type IS NOT NULL AND created_at > now() - interval '30 days'
+      UNION ALL
+      SELECT 'clewdr_cookies',      array_agg(DISTINCT cookie_short ORDER BY cookie_short)
+        FROM clewdr_logs WHERE cookie_short IS NOT NULL AND created_at > now() - interval '30 days'
+    `
+    const r = await pg.query(sql)
+    const out: any = {}
+    for (const row of r.rows) out[row.k] = row.v || []
+    res.json({ status: "Success", data: out })
+  } catch (e: any) {
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+// ── Settings (retention) ──────────────────────────
+export async function handleGetSettings(_req: Request, res: Response) {
+  try {
+    const pg = getPool()
+    const r = await pg.query(`SELECT key, value FROM audit_config`)
+    const cfg: any = {}
+    for (const row of r.rows) cfg[row.key] = row.value
+    res.json({ status: "Success", data: cfg })
+  } catch (e: any) {
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+export async function handleUpdateSettings(req: Request, res: Response) {
+  try {
+    const updates = req.body as Record<string, string>
+    const pg = getPool()
+    const allowed = new Set([
+      "retention_days_clewdr",
+      "retention_days_oai",
+      "enabled_clewdr",
+      "enabled_oai",
+      "max_body_kb",
+    ])
+    for (const [k, v] of Object.entries(updates)) {
+      if (!allowed.has(k)) continue
+      await pg.query(
+        `INSERT INTO audit_config (key, value, updated_at) VALUES ($1, $2, NOW())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW()`,
+        [k, String(v)],
+      )
+    }
+    res.json({ status: "Success" })
+  } catch (e: any) {
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}
+
+// ── Manual purge trigger ──────────────────────────
+export async function handlePurge(_req: Request, res: Response) {
+  try {
+    const pg = getPool()
+    const r = await pg.query(`SELECT * FROM purge_old_logs()`)
+    res.json({ status: "Success", data: r.rows })
+  } catch (e: any) {
+    res.status(500).json({ status: "Fail", message: e.message })
+  }
+}

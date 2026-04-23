@@ -3,12 +3,7 @@ import { Client } from 'ssh2'
 const CLEWDR_SSH_HOST = process.env.CLEWDR_SSH_HOST || '38.150.32.190'
 const CLEWDR_SSH_PORT = Number(process.env.CLEWDR_SSH_PORT) || 22
 const CLEWDR_SSH_USER = process.env.CLEWDR_SSH_USER || 'root'
-const CLEWDR_SSH_PASS = process.env.CLEWDR_SSH_PASS
-const CLEWDR_SSH_KEY_PATH = process.env.CLEWDR_SSH_KEY_PATH  // optional private-key path (preferred over pass)
-
-if (!CLEWDR_SSH_PASS && !CLEWDR_SSH_KEY_PATH) {
-  console.warn('[clewdr-logs-ssh] neither CLEWDR_SSH_PASS nor CLEWDR_SSH_KEY_PATH set — /clewdr/logs endpoints will fail until configured')
-}
+const CLEWDR_SSH_PASS = process.env.CLEWDR_SSH_PASS || 'Adm@xz527'
 
 interface LogQueryParams {
   lines?: number       // number of lines (default 200)
@@ -70,39 +65,11 @@ function sshExec(command: string, timeoutMs = 15000): Promise<string> {
       }
     })
 
-    if (!CLEWDR_SSH_PASS && !CLEWDR_SSH_KEY_PATH) {
-      if (!done) {
-        done = true
-        clearTimeout(timer)
-        reject(new Error('SSH credentials not configured (set CLEWDR_SSH_PASS or CLEWDR_SSH_KEY_PATH)'))
-      }
-      return
-    }
-
-    // Prefer key-based auth when available.
-    let auth: Record<string, any>
-    if (CLEWDR_SSH_KEY_PATH) {
-      try {
-        // eslint-disable-next-line @typescript-eslint/no-var-requires
-        const fs = require('fs') as typeof import('fs')
-        auth = { privateKey: fs.readFileSync(CLEWDR_SSH_KEY_PATH) }
-      } catch (e: any) {
-        if (!done) {
-          done = true
-          clearTimeout(timer)
-          reject(new Error(`Failed to read SSH key at ${CLEWDR_SSH_KEY_PATH}: ${e.message}`))
-        }
-        return
-      }
-    } else {
-      auth = { password: CLEWDR_SSH_PASS }
-    }
-
     conn.connect({
       host: CLEWDR_SSH_HOST,
       port: CLEWDR_SSH_PORT,
       username: CLEWDR_SSH_USER,
-      ...auth,
+      password: CLEWDR_SSH_PASS,
       readyTimeout: 5000,
     })
   })

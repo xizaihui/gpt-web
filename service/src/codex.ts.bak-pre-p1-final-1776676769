@@ -273,23 +273,8 @@ function _loadPoolFromDisk(): PoolStore {
   return { accounts: [], lastUpdated: 0, roundRobinIndex: 0 }
 }
 
-// In PM2 cluster mode multiple workers would each try to flush this file.
-// That's a disk-level race: `writeFile(tmp)+rename()` is atomic per-call but
-// N workers racing can still overwrite each other's roundRobinIndex.
-//
-// Strategy: only the worker with NODE_APP_INSTANCE=0 writes to disk. The
-// others keep their in-memory pool (useful for reads) but don't persist.
-// Downside: rrIdx / error counts / token updates from non-primary workers are
-// ephemeral. For chatgpt-web that's acceptable because:
-//   * rrIdx just needs to drift forward; losing a step is fine.
-//   * refreshAccount() / addAccount() are admin actions going through a
-//     sticky session, not load-balanced, so they usually hit worker 0 anyway.
-//   * recordError is best-effort already.
-// If we ever need true multi-writer we'll move this to SQLite or Redis.
-const _isPrimaryWorker = (process.env.NODE_APP_INSTANCE === undefined || process.env.NODE_APP_INSTANCE === '0')
-
 async function _flushPoolToDisk(): Promise<void> {
-  if (!_memPool || !_isPrimaryWorker) return
+  if (!_memPool) return
   // Snapshot under a microtask to avoid concurrent mutation during JSON.stringify.
   const snapshot = JSON.parse(JSON.stringify(_memPool)) as PoolStore
   snapshot.lastUpdated = Date.now()
@@ -321,7 +306,7 @@ setInterval(() => {
 }, FLUSH_SAFETY_INTERVAL_MS).unref()
 
 function _flushPoolSync(): void {
-  if (!_memPool || !_isPrimaryWorker) return
+  if (!_memPool) return
   try {
     const snapshot = JSON.parse(JSON.stringify(_memPool)) as PoolStore
     snapshot.lastUpdated = Date.now()

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 import { fetchClewdrCookies, deleteClewdrCookie, disableClewdrCookie, enableClewdrCookie } from '@/api'
 import Icon from '@/components/common/Icon.vue'
 import QuotaProgressBar from './components/QuotaProgressBar.vue'
@@ -35,12 +35,7 @@ async function load(refresh = false) {
   loading.value = false
   selected.value = new Set()
 }
-let countdownTimer: ReturnType<typeof setInterval> | null = null
-onMounted(() => {
-  load()
-  countdownTimer = setInterval(() => { /* force re-render for countdowns */ cookieData.value = { ...cookieData.value } }, 10000)
-})
-onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
+onMounted(load)
 
 const allRows = computed(() => {
   const v = (cookieData.value.valid || []).map((c: any) => ({ ...c, _status: 'valid' }))
@@ -119,28 +114,10 @@ async function batchDelete() {
   await load()
 }
 
-function statusTag(r: any) {
-  const s = typeof r === 'string' ? r : r?._status
-  if (s === 'valid') {
-    if (r?.disabled) return { text: '已禁用', cls: 'bg-[#f4f4f5] text-[#71717a] border-[#e5e7eb]' }
-    return { text: '正常', cls: 'bg-[#f0fdf4] text-[#16a34a] border-[#bbf7d0]' }
-  }
-  if (s === 'exhausted') {
-    if (r?.reset_time) return { text: '限流中', cls: 'bg-[#eff6ff] text-[#2563eb] border-[#bfdbfe]' }
-    return { text: '耗尽', cls: 'bg-[#fffbeb] text-[#d97706] border-[#fde68a]' }
-  }
+function statusTag(s: string) {
+  if (s === 'valid') return { text: '正常', cls: 'bg-[#f0fdf4] text-[#16a34a] border-[#bbf7d0]' }
+  if (s === 'exhausted') return { text: '耗尽', cls: 'bg-[#fffbeb] text-[#d97706] border-[#fde68a]' }
   return { text: '失效', cls: 'bg-[#fef2f2] text-[#dc2626] border-[#fecaca]' }
-}
-
-function rateLimitRemaining(resetTime: number | undefined) {
-  if (!resetTime) return ''
-  const now = Math.floor(Date.now() / 1000)
-  const diff = resetTime - now
-  if (diff <= 0) return '即将恢复'
-  const m = Math.floor(diff / 60)
-  const s = diff % 60
-  if (m > 60) return Math.floor(m / 60) + 'h' + (m % 60) + 'm'
-  return m + 'm' + s + 's'
 }
 </script>
 
@@ -178,7 +155,7 @@ function rateLimitRemaining(resetTime: number | undefined) {
           <div class="text-lg font-semibold text-[#16a34a] tabular-nums">{{ stats.valid }}</div>
         </div>
         <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
-          <div class="text-[11px] text-[#71717a]">限流</div>
+          <div class="text-[11px] text-[#71717a]">耗尽</div>
           <div class="text-lg font-semibold text-[#d97706] tabular-nums">{{ stats.exhausted }}</div>
         </div>
         <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
@@ -205,7 +182,7 @@ function rateLimitRemaining(resetTime: number | undefined) {
           >
             <option value="all">全部状态</option>
             <option value="valid">正常</option>
-            <option value="exhausted">限流/耗尽</option>
+            <option value="exhausted">耗尽</option>
             <option value="invalid">失效</option>
           </select>
           <div class="flex-1" />
@@ -288,11 +265,8 @@ function rateLimitRemaining(resetTime: number | undefined) {
                 <td class="px-3 py-2.5">
                   <span
                     class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border"
-                    :class="statusTag(r).cls"
-                  >{{ statusTag(r).text }}</span>
-                  <div v-if="r._status === 'exhausted' && r.reset_time" class="text-[9px] text-[#2563eb] mt-0.5">
-                    ⏳ {{ rateLimitRemaining(r.reset_time) }} 后恢复
-                  </div>
+                    :class="statusTag(r._status).cls"
+                  >{{ statusTag(r._status).text }}</span>
                 </td>
                 <td class="px-3 py-2.5">
                   <QuotaProgressBar :value="r.session_utilization || 0" />

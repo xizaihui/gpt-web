@@ -132,24 +132,17 @@ export function detectClientType(ua: string | undefined, body: any): string {
 }
 
 export function extractFirstUserMessage(messages: any[]): string | undefined {
-  // Despite the legacy name (kept because column is named first_user_message),
-  // we now return the LAST user message — that's the one that triggered
-  // this response and matters most for forensics (e.g. induction keywords).
   if (!Array.isArray(messages)) return undefined
-  for (let i = messages.length - 1; i >= 0; i--) {
-    const m = messages[i]
+  for (const m of messages) {
     if (m?.role !== "user") continue
     const c = m.content
     if (typeof c === "string") return truncateChars(c, 500)
     if (Array.isArray(c)) {
-      const parts: string[] = []
       for (const b of c) {
-        if (b?.type === "text" && typeof b.text === "string") parts.push(b.text)
-        else if (b?.type === "tool_result") parts.push("[tool_result]")
-        else if (b?.type === "image") parts.push("[image]")
+        if (b?.type === "text" && typeof b.text === "string") return truncateChars(b.text, 500)
       }
-      if (parts.length) return truncateChars(parts.join("\n"), 500)
     }
+    return undefined
   }
   return undefined
 }
@@ -387,18 +380,14 @@ export function submitOai(event: AuditEvent) {
 
 // ── Flush logic ────────────────────────────────────
 let flushing = false
-let _lastFlushFailWarn = 0
 async function flush() {
   if (flushing || !pool || queue.length === 0) return
   flushing = true
-  // Cap per-flush batch size so a huge backlog doesn't build a monster query.
-  const batchSize = Math.min(queue.length, FLUSH_BATCH)
-  const batch = queue.splice(0, batchSize)
+  const batch = queue.splice(0, queue.length)
   try {
     const client = await pool.connect()
     try {
-      // Pre-process all rows so we can build parameter arrays.
-      const rows = batch.map(e => {
+      for (const e of batch) {
         const bodyObj = e.request_body
         const { body: reqBody, truncated: reqTrunc, size: reqSize } = bodyObj !== undefined
           ? truncateJson(bodyObj)
@@ -406,77 +395,64 @@ async function flush() {
         const { text: respText, truncated: respTrunc, size: respSize } = e.response_text !== undefined
           ? truncateText(e.response_text)
           : { text: null as any, truncated: false, size: 0 }
-        return {
-          request_id: e.request_id || null,
-          session_id: e.session_id || null,
-          api_key_hash: e.api_key_hash || null,
-          client_ip: e.client_ip || null,
-          user_agent: e.user_agent || null,
-          client_type: e.client_type || null,
-          endpoint: e.endpoint,
-          model: e.model || null,
-          status_code: e.status_code || null,
-          duration_ms: e.duration_ms || null,
-          error_msg: e.error_msg || null,
-          is_stream: e.is_stream || false,
-          has_tools: e.has_tools || false,
-          tool_count: e.tool_count || 0,
-          finish_reason_norm: e.finish_reason_norm || null,
-          prompt_tokens: e.prompt_tokens || 0,
-          completion_tokens: e.completion_tokens || 0,
-          cached_tokens: e.cached_tokens || 0,
-          cache_write_tokens: e.cache_write_tokens || 0,
-          request_body: reqBody !== null ? JSON.stringify(reqBody) : null,
-          request_truncated: reqTrunc,
-          request_size_bytes: bodyObj !== undefined ? reqSize : null,
-          response_text: respText,
-          response_truncated: respTrunc,
-          response_size_bytes: e.response_text !== undefined ? respSize : null,
-          first_user_message: e.first_user_message || null,
-          system_prompt_head: e.system_prompt_head || null,
-          upstream_channel: e.upstream_channel || null,
-          finish_reason: e.finish_reason_norm || null,
-        }
-      })
 
-      // Build a single multi-row INSERT. This is ~50x faster than per-row
-      // INSERTs across a WAN link (one network RTT instead of N).
-      const COLS = [
-        'request_id','session_id','api_key_hash','client_ip','user_agent','client_type',
-        'endpoint','model','status_code','duration_ms','error_msg',
-        'is_stream','has_tools','tool_count','finish_reason_norm',
-        'prompt_tokens','completion_tokens','cached_tokens','cache_write_tokens',
-        'request_body','request_truncated','request_size_bytes',
-        'response_text','response_truncated','response_size_bytes',
-        'first_user_message','system_prompt_head',
-        'upstream_channel','finish_reason',
-      ]
-      const NCOLS = COLS.length  // 29
-      const valuesSql: string[] = []
-      const params: any[] = []
-      rows.forEach((r, i) => {
-        const base = i * NCOLS
-        const ph = Array.from({length: NCOLS}, (_, j) => `$${base + j + 1}`).join(',')
-        valuesSql.push(`(${ph})`)
-        for (const c of COLS) params.push((r as any)[c])
-      })
-      const sql = `INSERT INTO oai_logs (${COLS.join(',')}) VALUES ${valuesSql.join(',')}`
-      await client.query(sql, params)
+        await client.query(`
+          INSERT INTO oai_logs (
+            request_id, session_id, api_key_hash, client_ip, user_agent, client_type,
+            endpoint, model, status_code, duration_ms, error_msg,
+            is_stream, has_tools, tool_count, finish_reason_norm,
+            prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
+            request_body, request_truncated, request_size_bytes,
+            response_text, response_truncated, response_size_bytes,
+            first_user_message, system_prompt_head,
+            upstream_channel, finish_reason
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10, $11,
+            $12, $13, $14, $15,
+            $16, $17, $18, $19,
+            $20, $21, $22,
+            $23, $24, $25,
+            $26, $27,
+            $28, $29
+          )
+        `, [
+          e.request_id || null,
+          e.session_id || null,
+          e.api_key_hash || null,
+          e.client_ip || null,
+          e.user_agent || null,
+          e.client_type || null,
+          e.endpoint,
+          e.model || null,
+          e.status_code || null,
+          e.duration_ms || null,
+          e.error_msg || null,
+          e.is_stream || false,
+          e.has_tools || false,
+          e.tool_count || 0,
+          e.finish_reason_norm || null,
+          e.prompt_tokens || 0,
+          e.completion_tokens || 0,
+          e.cached_tokens || 0,
+          e.cache_write_tokens || 0,
+          reqBody !== null ? JSON.stringify(reqBody) : null,
+          reqTrunc,
+          bodyObj !== undefined ? reqSize : null,
+          respText,
+          respTrunc,
+          e.response_text !== undefined ? respSize : null,
+          e.first_user_message || null,
+          e.system_prompt_head || null,
+          e.upstream_channel || null,
+          e.finish_reason_norm || null,
+        ])
+      }
     } finally {
       client.release()
     }
   } catch (e: any) {
-    // Don't drop the batch; re-queue at the HEAD so ordering is preserved.
-    // Cap re-queue to avoid runaway memory if Postgres is down for hours.
-    const now = Date.now()
-    const roomLeft = MAX_QUEUE - queue.length
-    const requeue = batch.slice(0, Math.max(0, roomLeft))
-    const permDrop = batch.length - requeue.length
-    queue.unshift(...requeue)
-    if (now - _lastFlushFailWarn > 30_000) {  // rate-limit warning
-      console.warn(`[AUDIT] flush failed (requeued ${requeue.length}, perm-dropped ${permDrop}): ${e.message}`)
-      _lastFlushFailWarn = now
-    }
+    console.warn(`[AUDIT] flush failed (${batch.length} dropped): ${e.message}`)
   } finally {
     flushing = false
   }

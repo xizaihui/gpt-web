@@ -1,6 +1,6 @@
 import type { Request, Response } from "express"
 import {
-  getNextAccount, getAccount, recordError, refreshAccount,
+  getNextAccount, recordError, refreshAccount,
   proxyFetch, getProxyUrl, CODEX_MODELS,
 } from "./codex"
 import { deriveSessionId, calculateCache } from "./cache-simulator"
@@ -207,9 +207,6 @@ export async function handleChatCompletions(req: Request, res: Response) {
   const clientType = detectClientType(userAgent, originalBody)
   const firstUserMessage = extractFirstUserMessage(originalBody.messages || [])
   const systemPromptHead = extractSystemHead(originalBody)
-  // Hoisted so the outer catch/finally can always clean up the timeout &
-  // listener even if the try-block threw before reaching them.
-  let cleanup: () => void = () => {}
   try {
     const body = req.body || {}
     let model: string = body.model || "gpt-5.4-mini"
@@ -274,91 +271,43 @@ export async function handleChatCompletions(req: Request, res: Response) {
       `stream=${stream} | reasoning=${reasoning || "off"} | sid=${sessionId}`
     )
 
-    // ── Abort plumbing ──
-    // 1) Hard 120s ceiling on upstream request (covers hung connections).
-    // 2) Client disconnect also aborts: stops wasting Codex quota on requests
-    //    nobody's listening to.
-    const abortCtrl = new AbortController()
-    const UPSTREAM_TIMEOUT_MS = Number(process.env.CODEX_UPSTREAM_TIMEOUT_MS) || 120_000
-    const timeoutHandle = setTimeout(() => {
-      try { abortCtrl.abort(new Error(`upstream timeout after ${UPSTREAM_TIMEOUT_MS}ms`)) } catch {}
-    }, UPSTREAM_TIMEOUT_MS)
-    const onClientClose = () => {
-      // Only treat as an abort if the response hasn't finished yet. Otherwise
-      // `req.on('close')` fires on every normal completion and kills our own
-      // reply before it hits the wire.
-      if (!res.writableEnded) {
-        try { abortCtrl.abort(new Error('client disconnected')) } catch {}
-      }
-    }
-    req.on('aborted', onClientClose)  // client actively closed
-    res.on('close', onClientClose)    // socket closed before response ended
-    cleanup = () => {
-      clearTimeout(timeoutHandle)
-      req.off?.('aborted', onClientClose)
-      res.off?.('close', onClientClose)
-    }
-
     const proxyUrl = getProxyUrl(account.proxy)
-    let response
-    try {
-      response = await proxyFetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${account.accessToken}`,
-          "accept": "text/event-stream",
-          "chatgpt-account-id": account.accountId,
-        },
-        body: JSON.stringify(requestBody),
-        proxy: proxyUrl,
-        signal: abortCtrl.signal,
-      } as any)
-    } catch (e: any) {
-      cleanup()
-      const msg = e?.message || String(e)
-      recordError(account.id, msg)
-      // Client gone? don't bother responding.
-      if (abortCtrl.signal.aborted && String(msg).includes('client disconnected')) {
-        try { res.end() } catch {}
-        return
-      }
-      return res.status(504).json({ error: { message: `upstream fetch failed: ${msg}`, type: 'upstream_error' } })
-    }
+    let response = await proxyFetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "Authorization": `Bearer ${account.accessToken}`,
+        "accept": "text/event-stream",
+        "chatgpt-account-id": account.accountId,
+      },
+      body: JSON.stringify(requestBody),
+      proxy: proxyUrl,
+    } as any)
 
-    // Auto-refresh on 401/403: keep the SAME account (refresh gave it a new
-    // token), don't rotate to a different one.
+    // Auto-refresh on 401/403
     if (response.status === 401 || response.status === 403) {
       console.log(`[OpenAI-GW] Got ${response.status}, refreshing token for ${account.email}`)
       const refreshResult = await refreshAccount(account.id)
       if (refreshResult.success) {
-        const refreshed = getAccount(account.id)
-        if (refreshed) {
-          try {
-            response = await proxyFetch(url, {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "Authorization": `Bearer ${refreshed.accessToken}`,
-                "accept": "text/event-stream",
-                "chatgpt-account-id": refreshed.accountId,
-              },
-              body: JSON.stringify(requestBody),
-              proxy: getProxyUrl(refreshed.proxy),
-              signal: abortCtrl.signal,
-            } as any)
-          } catch (e: any) {
-            cleanup()
-            const msg = e?.message || String(e)
-            recordError(account.id, msg)
-            return res.status(504).json({ error: { message: `upstream retry failed: ${msg}`, type: 'upstream_error' } })
-          }
+        // Re-fetch account (token updated)
+        const account2 = getNextAccount()
+        if (account2) {
+          response = await proxyFetch(url, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "Authorization": `Bearer ${account2.accessToken}`,
+              "accept": "text/event-stream",
+              "chatgpt-account-id": account2.accountId,
+            },
+            body: JSON.stringify(requestBody),
+            proxy: getProxyUrl(account2.proxy),
+          } as any)
         }
       }
     }
 
     if (!response.ok) {
-      cleanup()
       const errorText = await response.text()
       const errMsg = `Codex API error ${response.status}: ${errorText.slice(0, 300)}`
       recordError(account.id, errMsg)
@@ -535,7 +484,6 @@ export async function handleChatCompletions(req: Request, res: Response) {
 
       res.write("data: [DONE]\n\n")
       res.end()
-      cleanup()
 
       // Audit log (stream end)
       const finalText = accumulatedText
@@ -656,7 +604,6 @@ export async function handleChatCompletions(req: Request, res: Response) {
       }
       if (usageData) result.usage = usageData
       res.json(result)
-      cleanup()
 
       // Audit log (non-stream)
       submitOai({
@@ -687,175 +634,6 @@ export async function handleChatCompletions(req: Request, res: Response) {
     }
   } catch (err: any) {
     console.error(`[OpenAI-GW] Unhandled error: ${err.message}`)
-    if (!res.headersSent) {
-      res.status(500).json({ error: { message: err.message, type: "internal_error" } })
-    } else {
-      try { res.end() } catch {}
-    }
-  } finally {
-    cleanup()
-  }
-}
-
-// ────────────────────────────────────────────────────────────────────
-//  Responses API transparent proxy — for Codex / Claude Code clients
-//  that speak the native Responses API protocol (SSE with
-//  response.completed, response.failed, etc.)
-// ────────────────────────────────────────────────────────────────────
-export async function handleResponses(req: Request, res: Response) {
-  let cleanup: () => void = () => {}
-  try {
-    const body = req.body || {}
-    const model = body.model || "gpt-5.4-mini"
-
-    // Pick account from pool
-    const account = getNextAccount()
-    if (!account) {
-      return res.status(503).json({
-        type: "error",
-        error: { type: "pool_exhausted", message: "No available accounts in pool" },
-      })
-    }
-
-    const url = `${CODEX_BASE_URL}${CODEX_ENDPOINT}`
-    console.log(
-      `[Responses-GW] POST ${url} | model=${model} | account=${account.email} | stream=true`
-    )
-
-    // ── Abort plumbing ──
-    const abortCtrl = new AbortController()
-    const UPSTREAM_TIMEOUT_MS = Number(process.env.CODEX_UPSTREAM_TIMEOUT_MS) || 180_000
-    const timeoutHandle = setTimeout(() => {
-      try { abortCtrl.abort(new Error(`upstream timeout after ${UPSTREAM_TIMEOUT_MS}ms`)) } catch {}
-    }, UPSTREAM_TIMEOUT_MS)
-    const onClientClose = () => {
-      if (!res.writableEnded) {
-        try { abortCtrl.abort(new Error("client disconnected")) } catch {}
-      }
-    }
-    req.on("aborted", onClientClose)
-    res.on("close", onClientClose)
-    cleanup = () => {
-      clearTimeout(timeoutHandle)
-      req.off?.("aborted", onClientClose)
-      res.off?.("close", onClientClose)
-    }
-
-    // Force stream: true (Codex Responses API is always streamed)
-    const requestBody = { ...body, stream: true, store: false, instructions: body.instructions || "You are a helpful assistant." }
-
-    const makeRequest = async (acct: typeof account) => {
-      const proxyUrl = getProxyUrl(acct.proxy)
-      return proxyFetch(url, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${acct.accessToken}`,
-          "accept": "text/event-stream",
-          "chatgpt-account-id": acct.accountId,
-        },
-        body: JSON.stringify(requestBody),
-        proxy: proxyUrl,
-        signal: abortCtrl.signal,
-      } as any)
-    }
-
-    let response: globalThis.Response
-    try {
-      response = await makeRequest(account)
-    } catch (e: any) {
-      cleanup()
-      const msg = e?.message || String(e)
-      recordError(account.id, msg)
-      if (abortCtrl.signal.aborted && String(msg).includes("client disconnected")) {
-        try { res.end() } catch {}
-        return
-      }
-      return res.status(504).json({
-        type: "error",
-        error: { type: "upstream_error", message: `upstream fetch failed: ${msg}` },
-      })
-    }
-
-    // Auto-refresh on 401/403
-    if (response.status === 401 || response.status === 403) {
-      console.log(`[Responses-GW] Got ${response.status}, refreshing token for ${account.email}`)
-      const refreshResult = await refreshAccount(account.id)
-      if (refreshResult.success) {
-        const refreshed = getAccount(account.id)
-        if (refreshed) {
-          try {
-            response = await makeRequest(refreshed)
-          } catch (e: any) {
-            cleanup()
-            recordError(account.id, e?.message || String(e))
-            return res.status(504).json({
-              type: "error",
-              error: { type: "upstream_error", message: `upstream retry failed: ${e?.message}` },
-            })
-          }
-        }
-      }
-    }
-
-    if (!response.ok) {
-      cleanup()
-      const errorText = await response.text()
-      const errMsg = `Codex API error ${response.status}: ${errorText.slice(0, 500)}`
-      recordError(account.id, errMsg)
-      console.error(`[Responses-GW] ${errMsg}`)
-      return res.status(response.status >= 500 ? 502 : response.status).json({
-        type: "error",
-        error: { type: "upstream_error", message: errMsg },
-      })
-    }
-
-    // ── Transparent SSE proxy ──
-    res.setHeader("Content-Type", "text/event-stream; charset=utf-8")
-    res.setHeader("Cache-Control", "no-cache")
-    res.setHeader("Connection", "keep-alive")
-    res.setHeader("X-Accel-Buffering", "no")
-    res.flushHeaders()
-
-    const reader = response.body as any
-    const decoder = new TextDecoder()
-    let buffer = ""
-
-    try {
-      for await (const chunk of reader) {
-        const text = decoder.decode(chunk as any, { stream: true })
-        buffer += text
-
-        // Forward complete SSE lines immediately
-        const lines = buffer.split("\n")
-        buffer = lines.pop() || ""
-
-        for (const line of lines) {
-          res.write(line + "\n")
-        }
-      }
-      // Flush any remaining buffer
-      if (buffer) {
-        res.write(buffer)
-      }
-    } catch (streamErr: any) {
-      console.error(`[Responses-GW] Stream error: ${streamErr.message}`)
-      recordError(account.id, streamErr.message)
-    }
-
-    res.end()
-    cleanup()
-  } catch (err: any) {
-    console.error(`[Responses-GW] Unhandled error: ${err.message}`)
-    if (!res.headersSent) {
-      res.status(500).json({
-        type: "error",
-        error: { type: "internal_error", message: err.message },
-      })
-    } else {
-      try { res.end() } catch {}
-    }
-  } finally {
-    cleanup()
+    res.status(500).json({ error: { message: err.message, type: "internal_error" } })
   }
 }

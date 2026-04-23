@@ -275,21 +275,6 @@ export function deleteKiroAccount(id: string): Promise<void> {
 export function testKiroAccount(id: string): Promise<any> {
   return apiPost(`/kiro/accounts/${id}/test`)
 }
-export function fetchKiroUsage(refresh = false): Promise<any> {
-  return apiGet(`/kiro/usage${refresh ? '?refresh=1' : ''}`)
-}
-export function refreshKiroQuotas(): Promise<any> {
-  return apiPost('/kiro/refresh-quotas')
-}
-export function updateKiroAccountProxy(id: string, proxyUrl: string | null): Promise<any> {  return apiPatch(`/kiro/accounts/${encodeURIComponent(id)}/proxy`, { proxy_url: proxyUrl })}
-export function fetchKiroHistory(params: { hours?: number; accountId?: string; bucket?: number } = {}): Promise<any> {
-  const qs = new URLSearchParams()
-  if (params.hours) qs.append('hours', String(params.hours))
-  if (params.accountId) qs.append('account_id', params.accountId)
-  if (params.bucket) qs.append('bucket', String(params.bucket))
-  const q = qs.toString()
-  return apiGet(`/kiro/history${q ? `?${q}` : ''}`)
-}
 
 export function fetchChatAPI<T = any>(
   prompt: string,
@@ -496,21 +481,4 @@ export function fetchClewdrSystemLogs(params: Record<string, any> = {}): Promise
 
 export function fetchClewdrServiceStatus(): Promise<any> {
   return apiGet('/clewdr/service-status')
-}
-
-// ── Kiro Account Login API ──
-export function startKiroLogin(label?: string): Promise<any> {
-  return apiPost('/kiro/login/start', label ? { label } : {})
-}
-export function checkKiroLogin(label: string): Promise<any> {
-  return apiGet(`/kiro/login/${encodeURIComponent(label)}`)
-}
-export function completeKiroLogin(label: string): Promise<any> {
-  return apiPost(`/kiro/login/${encodeURIComponent(label)}/complete`)
-}
-export function cancelKiroLogin(label: string): Promise<any> {
-  return apiDelete(`/kiro/login/${encodeURIComponent(label)}`)
-}
-export function listKiroLogins(): Promise<any> {
-  return apiGet('/kiro/login/list')
 }

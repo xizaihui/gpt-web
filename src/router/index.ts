@@ -100,6 +100,11 @@ const routes: RouteRecordRaw[] = [
         component: () => import("@/views/admin-v2/CodexPool.vue"),
       },
       {
+        path: "audit",
+        name: "AdminV2Audit",
+        component: () => import("@/views/admin-v2/AuditLogs.vue"),
+      },
+      {
         path: "clewdr-logs",
         name: "AdminV2ClewdrLogs",
         component: () => import("@/views/admin-v2/ClewdrSystemLogs.vue"),

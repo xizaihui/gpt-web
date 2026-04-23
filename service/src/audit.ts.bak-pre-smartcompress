@@ -1,0 +1,298 @@
+import { Pool } from "pg"
+import fs from "fs"
+import crypto from "crypto"
+
+/**
+ * Audit log writer for chatgpt-web's OpenAI Gateway.
+ *
+ * Pushes every /v1/chat/completions request + response to a remote postgres
+ * instance (same one used by ClewdR). Fire-and-forget: never blocks the
+ * response path, drops events on pool exhaustion.
+ */
+
+interface AuditEvent {
+  request_id?: string
+  session_id?: string
+  api_key_hash?: string
+  client_ip?: string
+  user_agent?: string
+  client_type?: string
+  endpoint: string
+  model?: string
+  status_code?: number
+  duration_ms?: number
+  error_msg?: string
+  is_stream?: boolean
+  has_tools?: boolean
+  tool_count?: number
+  finish_reason_norm?: string
+  prompt_tokens?: number
+  completion_tokens?: number
+  cached_tokens?: number
+  cache_write_tokens?: number
+  request_body?: any
+  response_text?: string
+  first_user_message?: string
+  system_prompt_head?: string
+  upstream_channel?: number
+}
+
+// ── Config from env ────────────────────────────────
+const ENABLED = process.env.AUDIT_LOG_ENABLED === "true"
+const PG_URL = process.env.AUDIT_LOG_PG_URL || ""
+const CA_PATH = process.env.AUDIT_LOG_CA_PATH || ""
+const MAX_BODY_KB = parseInt(process.env.AUDIT_LOG_MAX_BODY_KB || "100", 10)
+
+const MAX_QUEUE = 10_000
+const FLUSH_BATCH = 200
+const FLUSH_INTERVAL_MS = 5_000
+const CHANNEL_NOISE_DROP_LOG_INTERVAL = 60_000
+
+let pool: Pool | null = null
+let queue: AuditEvent[] = []
+let lastDropWarn = 0
+let dropCounter = 0
+
+// ── Setup ──────────────────────────────────────────
+export function initAudit() {
+  if (!ENABLED) {
+    console.log("[AUDIT] disabled (AUDIT_LOG_ENABLED != true)")
+    return
+  }
+  if (!PG_URL) {
+    console.warn("[AUDIT] AUDIT_LOG_PG_URL not set — disabling")
+    return
+  }
+
+  let ca: string | Buffer | undefined
+  if (CA_PATH) {
+    try {
+      ca = fs.readFileSync(CA_PATH)
+    } catch (e: any) {
+      console.error(`[AUDIT] failed to read CA cert at ${CA_PATH}: ${e.message} — disabling`)
+      return
+    }
+  }
+
+  pool = new Pool({
+    connectionString: PG_URL,
+    ssl: ca ? { ca, rejectUnauthorized: true } : { rejectUnauthorized: false },
+    max: 4,
+    idleTimeoutMillis: 60_000,
+  })
+
+  // Connectivity probe
+  pool.query("SELECT version()").then(r => {
+    const v = r.rows[0]?.version || "?"
+    console.log(`[AUDIT] connectivity probe OK, server: ${v.slice(0, 60)}…`)
+  }).catch((e: any) => {
+    console.error(`[AUDIT] connectivity probe FAILED: ${e.message}`)
+  })
+
+  // Periodic flush
+  setInterval(() => { flush().catch(() => {}) }, FLUSH_INTERVAL_MS)
+
+  // Hourly purge
+  setInterval(async () => {
+    if (!pool) return
+    try {
+      const res = await pool.query("SELECT * FROM purge_old_logs()")
+      for (const row of res.rows) {
+        if (row.deleted_count > 0) {
+          console.log(`[AUDIT-PURGE] ${row.deleted_count} rows removed from ${row.table_name}`)
+        }
+      }
+    } catch (e: any) {
+      console.warn(`[AUDIT-PURGE] failed: ${e.message}`)
+    }
+  }, 3600 * 1000)
+
+  console.log(`[AUDIT] enabled (max_body_kb=${MAX_BODY_KB})`)
+}
+
+// ── Helpers ────────────────────────────────────────
+export function hashApiKey(bearer: string): string {
+  if (!bearer) return ""
+  return crypto.createHash("sha256").update(bearer).digest("hex").slice(0, 16)
+}
+
+export function detectClientType(ua: string | undefined, body: any): string {
+  const u = (ua || "").toLowerCase()
+  if (u.includes("claude-cli") || u.includes("claude-code")) return "claude-code"
+  if (u.includes("codex") || u.includes("openai/")) return "codex"
+  if (u.includes("cherrystudio") || u.includes("cherry studio")) return "cherry-studio"
+  if (u.includes("chatbox")) return "chatbox"
+  if (u.includes("chatgpt-web") || u.includes("chatgpt_web")) return "chatgpt-web"
+  if (u.includes("anthropic")) return "anthropic-sdk"
+  if (u.includes("python-httpx") || u.includes("python-requests")) return "python-script"
+  if (u.includes("node") || u.includes("axios")) return "node-script"
+  if (u.includes("curl")) return "curl"
+  if (body?.metadata?.user_id) return "claude-code"
+  return "unknown"
+}
+
+export function extractFirstUserMessage(messages: any[]): string | undefined {
+  if (!Array.isArray(messages)) return undefined
+  for (const m of messages) {
+    if (m?.role !== "user") continue
+    const c = m.content
+    if (typeof c === "string") return truncateChars(c, 500)
+    if (Array.isArray(c)) {
+      for (const b of c) {
+        if (b?.type === "text" && typeof b.text === "string") return truncateChars(b.text, 500)
+      }
+    }
+    return undefined
+  }
+  return undefined
+}
+
+export function extractSystemHead(body: any): string | undefined {
+  const msgs = body?.messages
+  if (Array.isArray(msgs)) {
+    for (const m of msgs) {
+      if (m?.role === "system" || m?.role === "developer") {
+        if (typeof m.content === "string") return truncateChars(m.content, 200)
+      }
+    }
+  }
+  if (typeof body?.system === "string") return truncateChars(body.system, 200)
+  return undefined
+}
+
+function truncateChars(s: string, max: number): string {
+  if (typeof s !== "string") return ""
+  if ([...s].length <= max) return s
+  return [...s].slice(0, max).join("") + "…"
+}
+
+function truncateJson(body: any): { body: any; truncated: boolean; size: number } {
+  const s = JSON.stringify(body)
+  const size = Buffer.byteLength(s, "utf8")
+  const maxBytes = MAX_BODY_KB * 1024
+  if (size <= maxBytes) return { body, truncated: false, size }
+  const head = s.slice(0, 512)
+  const tail = s.slice(s.length - 512)
+  return {
+    body: { _truncated: true, _original_size_bytes: size, _summary_head: head, _summary_tail: tail },
+    truncated: true,
+    size,
+  }
+}
+
+function truncateText(t: string): { text: string; truncated: boolean; size: number } {
+  const size = Buffer.byteLength(t, "utf8")
+  const maxBytes = MAX_BODY_KB * 1024
+  if (size <= maxBytes) return { text: t, truncated: false, size }
+  const head = t.slice(0, 1024)
+  const tail = t.slice(t.length - 1024)
+  return {
+    text: `[TRUNCATED ${size} bytes — showing head/tail]\n\n--- HEAD ---\n${head}\n\n--- TAIL ---\n${tail}`,
+    truncated: true,
+    size,
+  }
+}
+
+// ── Public API ─────────────────────────────────────
+
+/**
+ * Non-blocking submit. Events are queued in memory; flushed every
+ * FLUSH_INTERVAL_MS or when batch fills up.
+ */
+export function submitOai(event: AuditEvent) {
+  if (!pool) return
+  if (queue.length >= MAX_QUEUE) {
+    dropCounter += 1
+    const now = Date.now()
+    if (now - lastDropWarn > CHANNEL_NOISE_DROP_LOG_INTERVAL) {
+      console.warn(`[AUDIT] queue full — ${dropCounter} events dropped since last warn`)
+      lastDropWarn = now
+      dropCounter = 0
+    }
+    return
+  }
+  queue.push(event)
+  if (queue.length >= FLUSH_BATCH) {
+    flush().catch(() => {})
+  }
+}
+
+// ── Flush logic ────────────────────────────────────
+let flushing = false
+async function flush() {
+  if (flushing || !pool || queue.length === 0) return
+  flushing = true
+  const batch = queue.splice(0, queue.length)
+  try {
+    const client = await pool.connect()
+    try {
+      for (const e of batch) {
+        const bodyObj = e.request_body
+        const { body: reqBody, truncated: reqTrunc, size: reqSize } = bodyObj !== undefined
+          ? truncateJson(bodyObj)
+          : { body: null, truncated: false, size: 0 }
+        const { text: respText, truncated: respTrunc, size: respSize } = e.response_text !== undefined
+          ? truncateText(e.response_text)
+          : { text: null as any, truncated: false, size: 0 }
+
+        await client.query(`
+          INSERT INTO oai_logs (
+            request_id, session_id, api_key_hash, client_ip, user_agent, client_type,
+            endpoint, model, status_code, duration_ms, error_msg,
+            is_stream, has_tools, tool_count, finish_reason_norm,
+            prompt_tokens, completion_tokens, cached_tokens, cache_write_tokens,
+            request_body, request_truncated, request_size_bytes,
+            response_text, response_truncated, response_size_bytes,
+            first_user_message, system_prompt_head,
+            upstream_channel, finish_reason
+          ) VALUES (
+            $1, $2, $3, $4, $5, $6,
+            $7, $8, $9, $10, $11,
+            $12, $13, $14, $15,
+            $16, $17, $18, $19,
+            $20, $21, $22,
+            $23, $24, $25,
+            $26, $27,
+            $28, $29
+          )
+        `, [
+          e.request_id || null,
+          e.session_id || null,
+          e.api_key_hash || null,
+          e.client_ip || null,
+          e.user_agent || null,
+          e.client_type || null,
+          e.endpoint,
+          e.model || null,
+          e.status_code || null,
+          e.duration_ms || null,
+          e.error_msg || null,
+          e.is_stream || false,
+          e.has_tools || false,
+          e.tool_count || 0,
+          e.finish_reason_norm || null,
+          e.prompt_tokens || 0,
+          e.completion_tokens || 0,
+          e.cached_tokens || 0,
+          e.cache_write_tokens || 0,
+          reqBody !== null ? JSON.stringify(reqBody) : null,
+          reqTrunc,
+          bodyObj !== undefined ? reqSize : null,
+          respText,
+          respTrunc,
+          e.response_text !== undefined ? respSize : null,
+          e.first_user_message || null,
+          e.system_prompt_head || null,
+          e.upstream_channel || null,
+          e.finish_reason_norm || null,
+        ])
+      }
+    } finally {
+      client.release()
+    }
+  } catch (e: any) {
+    console.warn(`[AUDIT] flush failed (${batch.length} dropped): ${e.message}`)
+  } finally {
+    flushing = false
+  }
+}

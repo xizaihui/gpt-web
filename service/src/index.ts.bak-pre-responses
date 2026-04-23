@@ -19,7 +19,7 @@ import {
 import { runMigrations } from './dao/schema.js'
 import { migrateFromJson } from './dao/migrate-from-json.js'
 import { queryClewdrSystemLogs, getClewdrServiceStatus } from "./clewdr-logs-ssh.js"
-import { handleChatCompletions, handleModelsList, handleResponses } from "./openai-gateway"
+import { handleChatCompletions, handleModelsList } from "./openai-gateway"
 import {
   handleClewdrList, handleClewdrDetail,
   handleOaiList, handleOaiDetail,
@@ -84,8 +84,6 @@ function gatewayAuth(req, res, next) {
 
 router.post('/openai/v1/chat/completions', gatewayAuth, handleChatCompletions)
 router.get('/openai/v1/models', gatewayAuth, handleModelsList)
-router.post('/openai/v1/responses', express.json({ limit: '50mb' }), gatewayAuth, handleResponses)
-router.post('/openai/responses', express.json({ limit: '50mb' }), gatewayAuth, handleResponses)
 
 router.post('/chat-process', [auth, limiter], async (req, res) => {
   console.log(`[chat-process] model=${req.body?.model} chatUuid=${req.body?.chatUuid} clientId=${(req.headers['x-client-id'] as string) || 'default'}`)
@@ -891,58 +889,6 @@ router.post('/kiro/accounts/:id/test', adminAuth, async (req, res) => {
   try {
     const data = await kiroGwFetch(`/v1/pool/accounts/${req.params.id}/test`, { method: 'POST' })
     res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.patch('/kiro/accounts/:id/proxy', adminAuth, async (req, res) => {
-  try {
-    const r = await fetch(`${KIRO_GW_URL}/v1/pool/accounts/${req.params.id}/proxy`, {
-      method: 'PATCH',
-      headers: { 'Authorization': `Bearer ${KIRO_GW_ADMIN_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ proxy_url: req.body.proxy_url ?? null }),
-    })
-    if (!r.ok) throw new Error(`KiroGW ${r.status}: ${(await r.text()).slice(0, 200)}`)
-    const data = await r.json()
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-// ─── Kiro Account Login (via login server) ─────────────────────────
-
-router.post('/kiro/login/start', adminAuth, async (req, res) => {
-  try {
-    const label = req.body?.label || ''
-    const qs = label ? `?label=${encodeURIComponent(label)}` : ''
-    const data = await kiroGwFetch(`/v1/pool/login/start${qs}`, { method: 'POST' })
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.get('/kiro/login/list', adminAuth, async (_req, res) => {
-  try {
-    const data = await kiroGwFetch('/v1/pool/login')
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Success', data: { sessions: [] } }) }
-})
-
-router.get('/kiro/login/:label', adminAuth, async (req, res) => {
-  try {
-    const data = await kiroGwFetch(`/v1/pool/login/${encodeURIComponent(req.params.label)}`)
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.post('/kiro/login/:label/complete', adminAuth, async (req, res) => {
-  try {
-    const data = await kiroGwFetch(`/v1/pool/login/${encodeURIComponent(req.params.label)}/complete`, { method: 'POST' })
-    res.json({ status: 'Success', data })
-  } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
-})
-
-router.delete('/kiro/login/:label', adminAuth, async (req, res) => {
-  try {
-    await kiroGwFetch(`/v1/pool/login/${encodeURIComponent(req.params.label)}`, { method: 'DELETE' })
-    res.json({ status: 'Success' })
   } catch (e: any) { res.json({ status: 'Fail', message: e.message }) }
 })
 

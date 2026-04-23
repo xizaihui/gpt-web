@@ -14,6 +14,7 @@ const navItems = [
   { path: '/admin-v2/logs', label: '请求日志', icon: 'scroll', desc: 'ClewdR API 请求记录 · Headers 详情' },
   { path: '/admin-v2/settings', label: '设置', icon: 'sliders', desc: '系统参数与告警阈值' },
   { path: '/admin-v2/codex-pool', label: 'ChatGPT 号池', icon: 'bot', desc: 'Codex/ChatGPT OAuth 账号管理' },
+  { path: '/admin-v2/audit', label: '审计日志', icon: 'archive', desc: '完整请求/响应审计 · TLS postgres' },
   { path: '/admin-v2/clewdr-logs', label: 'ClewdR 日志', icon: 'terminal', desc: '实时系统日志 · SSH journalctl' },
 ]
 

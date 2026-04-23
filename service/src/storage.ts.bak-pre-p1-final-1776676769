@@ -15,12 +15,6 @@ const db = new Database(DB_PATH, {})
 db.pragma('journal_mode = WAL')
 db.pragma('foreign_keys = ON')
 db.pragma('busy_timeout = 5000')
-// synchronous=NORMAL is the sweet spot for WAL: writes don't fsync per-commit
-// (batched at checkpoint) while still durable on crash. Full is overkill for
-// chat history storage where a lost second of writes is not catastrophic.
-db.pragma('synchronous = NORMAL')
-// mmap speeds up reads on hot pages; 128MB covers typical chat-history size.
-db.pragma('mmap_size = 134217728')
 
 // Create tables (for fresh DBs — includes client_id from the start)
 db.exec(`
