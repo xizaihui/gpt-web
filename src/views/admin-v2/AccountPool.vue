@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { fetchClewdrCookies, deleteClewdrCookie, disableClewdrCookie, enableClewdrCookie } from '@/api'
 import Icon from '@/components/common/Icon.vue'
 import QuotaProgressBar from './components/QuotaProgressBar.vue'
 import ResetCountdown from './components/ResetCountdown.vue'
 import AccountDetailDrawer from './components/AccountDetailDrawer.vue'
 import BatchAddDialog from './components/BatchAddDialog.vue'
+import KiroPoolPanel from './KiroPoolPanel.vue'
 
 type Provider = 'claude' | 'codex' | 'gemini' | 'kiro'
 
@@ -14,7 +15,7 @@ const tabs: { key: Provider; label: string; ready: boolean }[] = [
   { key: 'claude', label: 'Claude', ready: true },
   { key: 'codex', label: 'Codex', ready: false },
   { key: 'gemini', label: 'Gemini', ready: false },
-  { key: 'kiro', label: 'Kiro', ready: false },
+  { key: 'kiro', label: 'Kiro', ready: true },
 ]
 
 const cookieData = ref<any>({ valid: [], exhausted: [], invalid: [] })
@@ -27,14 +28,19 @@ const showBatchAdd = ref(false)
 const showDrawer = ref(false)
 const currentAccount = ref<any>(null)
 
-async function load() {
+async function load(refresh = false) {
   loading.value = true
-  try { cookieData.value = await fetchClewdrCookies() }
+  try { cookieData.value = await fetchClewdrCookies(refresh) }
   catch (e) { console.error(e) }
   loading.value = false
   selected.value = new Set()
 }
-onMounted(load)
+let countdownTimer: ReturnType<typeof setInterval> | null = null
+onMounted(() => {
+  load()
+  countdownTimer = setInterval(() => { /* force re-render for countdowns */ cookieData.value = { ...cookieData.value } }, 10000)
+})
+onBeforeUnmount(() => { if (countdownTimer) clearInterval(countdownTimer) })
 
 const allRows = computed(() => {
   const v = (cookieData.value.valid || []).map((c: any) => ({ ...c, _status: 'valid' }))
@@ -113,10 +119,28 @@ async function batchDelete() {
   await load()
 }
 
-function statusTag(s: string) {
-  if (s === 'valid') return { text: '正常', cls: 'bg-[#f0fdf4] text-[#16a34a] border-[#bbf7d0]' }
-  if (s === 'exhausted') return { text: '耗尽', cls: 'bg-[#fffbeb] text-[#d97706] border-[#fde68a]' }
+function statusTag(r: any) {
+  const s = typeof r === 'string' ? r : r?._status
+  if (s === 'valid') {
+    if (r?.disabled) return { text: '已禁用', cls: 'bg-[#f4f4f5] text-[#71717a] border-[#e5e7eb]' }
+    return { text: '正常', cls: 'bg-[#f0fdf4] text-[#16a34a] border-[#bbf7d0]' }
+  }
+  if (s === 'exhausted') {
+    if (r?.reset_time) return { text: '限流中', cls: 'bg-[#eff6ff] text-[#2563eb] border-[#bfdbfe]' }
+    return { text: '耗尽', cls: 'bg-[#fffbeb] text-[#d97706] border-[#fde68a]' }
+  }
   return { text: '失效', cls: 'bg-[#fef2f2] text-[#dc2626] border-[#fecaca]' }
+}
+
+function rateLimitRemaining(resetTime: number | undefined) {
+  if (!resetTime) return ''
+  const now = Math.floor(Date.now() / 1000)
+  const diff = resetTime - now
+  if (diff <= 0) return '即将恢复'
+  const m = Math.floor(diff / 60)
+  const s = diff % 60
+  if (m > 60) return Math.floor(m / 60) + 'h' + (m % 60) + 'm'
+  return m + 'm' + s + 's'
 }
 </script>
 
@@ -154,7 +178,7 @@ function statusTag(s: string) {
           <div class="text-lg font-semibold text-[#16a34a] tabular-nums">{{ stats.valid }}</div>
         </div>
         <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
-          <div class="text-[11px] text-[#71717a]">耗尽</div>
+          <div class="text-[11px] text-[#71717a]">限流</div>
           <div class="text-lg font-semibold text-[#d97706] tabular-nums">{{ stats.exhausted }}</div>
         </div>
         <div class="rounded-lg border border-[#e5e7eb] bg-white p-3">
@@ -181,13 +205,13 @@ function statusTag(s: string) {
           >
             <option value="all">全部状态</option>
             <option value="valid">正常</option>
-            <option value="exhausted">耗尽</option>
+            <option value="exhausted">限流/耗尽</option>
             <option value="invalid">失效</option>
           </select>
           <div class="flex-1" />
           <button
             class="inline-flex items-center gap-1.5 px-2.5 py-1.5 text-xs rounded-md border border-[#e5e7eb] text-[#71717a] hover:text-[#18181b] hover:bg-[#fafafa]"
-            @click="load"
+            @click="load(true)"
           >
             <Icon name="refresh-cw" :size="12" />
             刷新
@@ -264,8 +288,11 @@ function statusTag(s: string) {
                 <td class="px-3 py-2.5">
                   <span
                     class="inline-flex px-1.5 py-0.5 rounded text-[10px] font-medium border"
-                    :class="statusTag(r._status).cls"
-                  >{{ statusTag(r._status).text }}</span>
+                    :class="statusTag(r).cls"
+                  >{{ statusTag(r).text }}</span>
+                  <div v-if="r._status === 'exhausted' && r.reset_time" class="text-[9px] text-[#2563eb] mt-0.5">
+                    ⏳ {{ rateLimitRemaining(r.reset_time) }} 后恢复
+                  </div>
                 </td>
                 <td class="px-3 py-2.5">
                   <QuotaProgressBar :value="r.session_utilization || 0" />
@@ -304,6 +331,9 @@ function statusTag(s: string) {
         </div>
       </div>
     </div>
+
+    <!-- Kiro tab -->
+    <KiroPoolPanel v-else-if="tab === 'kiro'" />
 
     <!-- WIP tabs -->
     <div v-else class="rounded-xl border border-dashed border-[#e5e7eb] bg-white p-12 flex flex-col items-center justify-center text-center">
