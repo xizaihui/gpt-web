@@ -25,7 +25,7 @@ module.exports = {
       AUDIT_LOG_MAX_BODY_KB: "100",
       CODEX_UPSTREAM_TIMEOUT_MS: "120000",
       BODY_SIZE_LIMIT: "2mb",
-      KIRO_GW_BASE_URL: "http://127.0.0.1:8000",
+      KIRO_GW_BASE_URL: "http://43.165.172.3:8000",
       KIRO_GW_API_KEY: "kiro-gw-xz527-secret-key",
       KIRO_GW_ADMIN_KEY: "A6EOI9T0nD6KdKPFw2ct9VEMXZ5huKTsK4DeBLsYPBToBwKmGupWTKYykgojG4hB",
     },

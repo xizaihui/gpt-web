@@ -150,7 +150,7 @@ async function handleToggle(acct: KiroAccount) {
 
 async function handleDelete(acct: KiroAccount) {
   if (!window.confirm(`确定删除账号 ${acct.id}（${acct.source}）？此操作不可恢复。`)) return
-  try { await deleteKiroAccount(acct.id); await loadUsage() } catch {}
+  try { await deleteKiroAccount(acct.id); await loadUsage() } catch (e: any) { window.alert(`删除失败: ${e.message}`) }
 }
 
 // Proxy inline edit
@@ -205,7 +205,7 @@ async function pollLoginStatus() {
   if (!loginLabel.value || loginState.value !== 'waiting') return
   try {
     const res: any = await checkKiroLogin(loginLabel.value)
-    if (res?.state === 'complete' || res?.state === 'logged_in') {
+    if (res?.state === 'complete' || res?.state === 'logged_in' || res?.state === 'success') {
       stopLoginPolling()
       loginState.value = 'completing'
       try {
