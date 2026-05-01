@@ -32,3 +32,6 @@ coverage
 /service/.env
 service/data/
 dist.bak.*
+ecosystem.config.cjs.bak*
+service/.env.bak*
+*.bak-pre-*
