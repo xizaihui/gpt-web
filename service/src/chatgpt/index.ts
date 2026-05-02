@@ -20,6 +20,112 @@ function countTokens(text: string): number {
   }
 }
 
+function isClaudeModelName(model: string | undefined): boolean {
+  return !!model && model.toLowerCase().includes('claude')
+}
+
+function readCacheReadTokens(usage: any): number {
+  return usage?.cache_read_input_tokens
+    || usage?.prompt_tokens_details?.cached_tokens
+    || usage?.input_tokens_details?.cached_tokens
+    || usage?.claude_cache_read_tokens
+    || 0
+}
+
+function readCacheWriteTokens(usage: any): number {
+  return usage?.cache_creation_input_tokens
+    || usage?.prompt_tokens_details?.cached_creation_tokens
+    || usage?.input_tokens_details?.cached_creation_tokens
+    || ((usage?.claude_cache_creation_5_m_tokens || 0) + (usage?.claude_cache_creation_1_h_tokens || 0))
+    || 0
+}
+
+function normalizeCacheUsageFields(usage: any) {
+  if (!usage)
+    return { cacheRead: 0, cacheWrite: 0 }
+
+  const cacheRead = readCacheReadTokens(usage)
+  const cacheWrite = readCacheWriteTokens(usage)
+  usage.prompt_tokens_details = usage.prompt_tokens_details || {}
+  usage.input_tokens_details = usage.input_tokens_details || usage.prompt_tokens_details
+
+  if (cacheRead > 0) {
+    usage.cache_read_input_tokens = usage.cache_read_input_tokens || cacheRead
+    usage.prompt_tokens_details.cached_tokens = usage.prompt_tokens_details.cached_tokens || cacheRead
+    usage.input_tokens_details.cached_tokens = usage.input_tokens_details.cached_tokens || cacheRead
+  }
+  if (cacheWrite > 0) {
+    usage.cache_creation_input_tokens = usage.cache_creation_input_tokens || cacheWrite
+    usage.prompt_tokens_details.cached_creation_tokens = usage.prompt_tokens_details.cached_creation_tokens || cacheWrite
+    usage.input_tokens_details.cached_creation_tokens = usage.input_tokens_details.cached_creation_tokens || cacheWrite
+  }
+
+  return { cacheRead, cacheWrite }
+}
+
+function upstreamSessionId(lastContext: any): string {
+  return String(lastContext?.sessionId || '')
+    .replace(/[\r\n]/g, '')
+    .slice(0, 200)
+}
+
+function markTextContentForClaudeCache(content: any): any {
+  const cacheControl = { type: 'ephemeral' }
+  if (typeof content === 'string')
+    return [{ type: 'text', text: content || '...', cache_control: cacheControl }]
+
+  if (Array.isArray(content)) {
+    const next = content.map(item => ({ ...item }))
+    for (let i = next.length - 1; i >= 0; i--) {
+      if (next[i]?.type === 'text') {
+        next[i].cache_control = cacheControl
+        return next
+      }
+    }
+    return next
+  }
+
+  return content
+}
+
+function markLastSystemBlockForClaudeCache(systemBlocks?: any[]): boolean {
+  if (!systemBlocks || systemBlocks.length === 0)
+    return false
+
+  for (let i = systemBlocks.length - 1; i >= 0; i--) {
+    if (systemBlocks[i]?.type === 'text') {
+      systemBlocks[i].cache_control = { type: 'ephemeral' }
+      return true
+    }
+  }
+  return false
+}
+
+function applyClaudePromptCache(messages: any[], model: string, systemBlocks?: any[]) {
+  if (!isClaudeModelName(model))
+    return
+
+  // Cache the stable prefix: the latest historical assistant before the current user.
+  for (let i = messages.length - 2; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg.role === 'assistant') {
+      msg.content = markTextContentForClaudeCache(msg.content)
+      return
+    }
+  }
+
+  if (markLastSystemBlockForClaudeCache(systemBlocks))
+    return
+
+  for (let i = messages.length - 2; i >= 0; i--) {
+    const msg = messages[i]
+    if (msg.role === 'system') {
+      msg.content = markTextContentForClaudeCache(msg.content)
+      return
+    }
+  }
+}
+
 // Default config
 const API_BASE_URL = isNotEmptyString(process.env.OPENAI_API_BASE_URL)
   ? process.env.OPENAI_API_BASE_URL
@@ -115,27 +221,18 @@ async function chatWithClaude(
   lastContext: any,
 ) {
   const _logStartMs = Date.now()
-  // Build system blocks (top-level, with cache_control)
+  // Build system blocks (top-level Anthropic format)
   const systemBlocks: any[] = []
   if (isNotEmptyString(systemMessage)) {
-    systemBlocks.push({ type: 'text', text: systemMessage!, cache_control: { type: 'ephemeral' } })
+    systemBlocks.push({ type: 'text', text: systemMessage! })
   }
 
   // Build messages array (Anthropic format: no "system" role in messages)
   const messages: any[] = []
 
   if (history && Array.isArray(history) && history.length > 0) {
-    history.forEach((msg: any, idx: number) => {
-      const isLast = idx === history.length - 1
-      if (isLast) {
-        // Mark last history message with cache_control for prefix caching
-        messages.push({
-          role: msg.role,
-          content: [{ type: 'text', text: msg.content, cache_control: { type: 'ephemeral' } }],
-        })
-      } else {
-        messages.push({ role: msg.role, content: msg.content })
-      }
+    history.forEach((msg: any) => {
+      messages.push({ role: msg.role, content: msg.content })
     })
   }
 
@@ -160,6 +257,7 @@ async function chatWithClaude(
     })
     messages.push({ role: 'user', content: anthropicContent })
   }
+  applyClaudePromptCache(messages, useModel, systemBlocks)
 
   // Build URL: /v1/messages
   const baseUrl = useBaseUrl.endsWith('/') ? useBaseUrl.slice(0, -1) : useBaseUrl
@@ -179,17 +277,22 @@ async function chatWithClaude(
     requestBody.temperature = temperature
   }
 
-  console.log(`[Claude Native] POST ${url} | model: ${useModel} | system: ${systemBlocks.length} blocks | messages: ${messages.length} | cachePts: system+lastHistory`)
+  console.log(`[Claude Native] POST ${url} | model: ${useModel} | system: ${systemBlocks.length} blocks | messages: ${messages.length} | cachePt: stable-prefix`)
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'x-api-key': useApiKey,
+    'Authorization': `Bearer ${useApiKey}`,
+    'anthropic-version': '2023-06-01',
+    'anthropic-beta': 'prompt-caching-2024-07-31',
+  }
+  const sessionId = upstreamSessionId(lastContext)
+  if (sessionId)
+    headers['x-session-id'] = sessionId
 
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': useApiKey,
-      'Authorization': `Bearer ${useApiKey}`,
-      'anthropic-version': '2023-06-01',
-      'anthropic-beta': 'prompt-caching-2024-07-31',
-    },
+    headers,
     body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(180_000),
   })
@@ -326,6 +429,7 @@ async function chatWithOpenAI(
 
   const userContent = buildUserContent(message, files)
   messages.push({ role: 'user', content: userContent })
+  applyClaudePromptCache(messages, useModel)
 
   const baseUrl = useBaseUrl.endsWith('/') ? useBaseUrl.slice(0, -1) : useBaseUrl
   const url = baseUrl.includes('/v1') ? `${baseUrl}/chat/completions` : `${baseUrl}/v1/chat/completions`
@@ -344,12 +448,17 @@ async function chatWithOpenAI(
 
   console.log(`[OpenAI] POST ${url} | model: ${useModel} | messages: ${messages.length}`)
 
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'Authorization': `Bearer ${useApiKey}`,
+  }
+  const sessionId = upstreamSessionId(lastContext)
+  if (sessionId)
+    headers['x-session-id'] = sessionId
+
   const response = await fetch(url, {
     method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': `Bearer ${useApiKey}`,
-    },
+    headers,
     body: JSON.stringify(requestBody),
     signal: AbortSignal.timeout(180_000),
   })
@@ -384,7 +493,7 @@ async function chatWithOpenAI(
         if (delta) {
           // Smooth streaming only for Claude models (upstream often batches tokens into chunks).
           // GPT / other models: pass through unchanged to avoid artificial latency.
-          const isClaudeModel = (useModel || '').toLowerCase().includes('claude')
+          const isClaudeModel = isClaudeModelName(useModel)
           if (isClaudeModel) {
             const chars = Array.from(delta as string)
             const CHUNK_SIZE = 2  // emit 2 chars at a time
@@ -423,23 +532,7 @@ async function chatWithOpenAI(
     // Add current user message token count
     const userMsgTokens = countTokens(message)
     finalUsage.user_message_tokens = userMsgTokens
-
-    // Calculate cache_write per Claude Prompt Caching doc:
-    // R1: cache_write = all input (system + user msg)
-    // RN: cache_write = prev_output + current_user_msg
-    const cacheRead = finalUsage.cache_read_input_tokens || finalUsage.prompt_tokens_details?.cached_tokens || 0
-    const reportedCacheWrite = finalUsage.cache_creation_input_tokens || finalUsage.claude_cache_creation_5_m_tokens || 0
-
-    if (reportedCacheWrite === 0 && cacheRead > 0 && history && history.length > 0) {
-      // Get last assistant message token count
-      const lastAssistant = [...history].reverse().find((m: any) => m.role === 'assistant')
-      const prevOutputTokens = lastAssistant ? countTokens(lastAssistant.content || '') : 0
-      // cache_write = prev output + current user message + framing overhead
-      finalUsage.cache_creation_input_tokens = prevOutputTokens + userMsgTokens + 4
-    } else if (reportedCacheWrite === 0 && cacheRead === 0) {
-      // R1: all input is cache_write (use prompt_tokens from API)
-      finalUsage.cache_creation_input_tokens = finalUsage.prompt_tokens || 0
-    }
+    const { cacheRead, cacheWrite } = normalizeCacheUsageFields(finalUsage)
 
     console.log(`[OpenAI] usage:`, JSON.stringify(finalUsage))
     // Record request log
@@ -451,8 +544,8 @@ async function chatWithOpenAI(
         duration_ms: Date.now() - _logStartMs,
         input_tokens: finalUsage.user_message_tokens || 0,
         output_tokens: finalUsage.completion_tokens || 0,
-        cache_read_tokens: finalUsage.cache_read_input_tokens || finalUsage.prompt_tokens_details?.cached_tokens || 0,
-        cache_write_tokens: finalUsage.cache_creation_input_tokens || 0,
+        cache_read_tokens: cacheRead,
+        cache_write_tokens: cacheWrite,
       })
     } catch (e) { console.error('[Log] record failed:', e) }
     onProgress?.({
@@ -502,6 +595,7 @@ function injectModelIdentity(systemMsg: string | undefined, model: string): stri
 async function chatReplyProcess(options: RequestOptions) {
   const { message, lastContext, process: onProgress, systemMessage, temperature, top_p, model: requestModel, apiBaseUrl: reqBaseUrl, apiKey: reqApiKey, files, history, reasoning, sessionId } = options as any
   try {
+    const contextWithSession = { ...(lastContext || {}), sessionId }
     const useModel = requestModel || DEFAULT_MODEL
     const isCodex = useModel && useModel.startsWith('codex:')
     const isClaudePool = useModel && useModel.startsWith('claude-pool:')
@@ -534,9 +628,9 @@ async function chatReplyProcess(options: RequestOptions) {
       }
       return sendResponse({ type: 'Success', data: { id: 'claude-pool-' + Date.now(), text: '', role: 'assistant' } })
     } else if (isClaude) {
-      return await chatWithClaude(useModel, useBaseUrl, useApiKey, enrichedSystemMessage, history, message, files, temperature, onProgress, lastContext)
+      return await chatWithClaude(useModel, useBaseUrl, useApiKey, enrichedSystemMessage, history, message, files, temperature, onProgress, contextWithSession)
     } else {
-      return await chatWithOpenAI(useModel, useBaseUrl, useApiKey, enrichedSystemMessage, history, message, files, temperature, onProgress, lastContext)
+      return await chatWithOpenAI(useModel, useBaseUrl, useApiKey, enrichedSystemMessage, history, message, files, temperature, onProgress, contextWithSession)
     }
   } catch (error: any) {
     global.console.error('Chat error:', error)

@@ -131,6 +131,35 @@ export function importState(state: { history: any[]; chat: any[] }): Promise<{ i
   return apiPost('/conversations/import', state)
 }
 
+export interface NewApiTokenInfo {
+  id: number
+  name: string
+  key: string
+  status: number
+  remain_quota: number
+  unlimited_quota: boolean
+  expired_time: number
+  group: string
+  model_limits_enabled: boolean
+}
+
+export interface NewApiSessionInfo {
+  logged_in: boolean
+  base_url: string
+  user: {
+    id: number
+    username: string
+    display_name?: string
+    role: number
+    group: string
+  }
+  tokens: NewApiTokenInfo[]
+}
+
+export function fetchNewApiSession(): Promise<NewApiSessionInfo> {
+  return apiGet('/newapi/session')
+}
+
 // ---- Codex Account Pool API ----
 
 export function fetchPoolStats(): Promise<{ total: number; active: number; expired: number; error: number; disabled: number }> {
@@ -351,11 +380,18 @@ export async function fetchChatAPIProcess<T = any>(
   if (params.chatUuid)
     data.chatUuid = params.chatUuid
 
-  const apiBaseUrl = params.apiBaseUrl || settingStore.apiBaseUrl
-  const apiKey = params.apiKey || settingStore.apiKey
+  if (settingStore.apiMode === 'newapi' && settingStore.newApiTokenId) {
+    data.newApiTokenId = settingStore.newApiTokenId
+    if (settingStore.apiBaseUrl)
+      data.apiBaseUrl = settingStore.apiBaseUrl
+  }
+  else {
+    const apiBaseUrl = params.apiBaseUrl || settingStore.apiBaseUrl
+    const apiKey = params.apiKey || settingStore.apiKey
 
-  if (apiBaseUrl) data.apiBaseUrl = apiBaseUrl
-  if (apiKey) data.apiKey = apiKey
+    if (apiBaseUrl) data.apiBaseUrl = apiBaseUrl
+    if (apiKey) data.apiKey = apiKey
+  }
 
   if (authStore.isChatGPTAPI) {
     data.systemMessage = settingStore.systemMessage

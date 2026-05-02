@@ -8,6 +8,9 @@ export interface SettingsState {
   top_p: number
   apiBaseUrl: string
   apiKey: string
+  apiMode: 'newapi' | 'custom'
+  newApiTokenId: number | null
+  newApiTokenName: string
   contextRounds: number
 }
 
@@ -20,6 +23,9 @@ export function defaultSetting(): SettingsState {
     top_p: 1,
     apiBaseUrl: DEFAULT_API_BASE_URL,
     apiKey: '',
+    apiMode: 'newapi',
+    newApiTokenId: null,
+    newApiTokenName: '',
     contextRounds: 20,
   }
 }

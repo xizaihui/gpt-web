@@ -13,13 +13,20 @@ const chatStore = useChatStore()
 
 const { isMobile } = useBasicLayout()
 
+const props = withDefaults(defineProps<{
+  embedded?: boolean
+}>(), {
+  embedded: false,
+})
+
 const collapsed = computed(() => appStore.siderCollapsed)
+const isDrawer = computed(() => isMobile.value || props.embedded)
 const showSearchModal = ref(false)
 const searchQuery = ref('')
 
 async function handleAdd() {
   await chatStore.addHistory({ title: t('chat.newChatTitle'), uuid: Date.now(), isEdit: false })
-  if (isMobile.value)
+  if (isDrawer.value)
     appStore.setSiderCollapsed(true)
   showSearchModal.value = false
 }
@@ -68,16 +75,18 @@ const searchResults = computed(() => {
 async function selectSearchResult(item: Chat.History) {
   await chatStore.setActive(item.uuid)
   showSearchModal.value = false
-  if (isMobile.value)
+  if (isDrawer.value)
     appStore.setSiderCollapsed(true)
 }
 
 const siderStyle = computed<CSSProperties>(() => {
-  if (isMobile.value) {
+  if (isDrawer.value) {
     return {
       position: 'fixed',
       zIndex: 50,
       height: '100%',
+      left: '0',
+      top: '0',
     }
   }
   return {}
@@ -93,9 +102,9 @@ const mobileSafeArea = computed(() => {
 })
 
 watch(
-  isMobile,
-  (val) => {
-    appStore.setSiderCollapsed(val)
+  [isMobile, () => props.embedded],
+  ([mobile, embedded]) => {
+    appStore.setSiderCollapsed(mobile || embedded)
   },
   {
     immediate: true,
@@ -107,24 +116,28 @@ watch(
 <template>
   <div
     v-show="!collapsed"
-    class="flex flex-col w-[260px] flex-shrink-0 bg-[#f9f9f9] h-full border-r border-[#e0e0e0]"
+    class="flex flex-col flex-shrink-0 h-full border-r border-[#e0e0e0]"
+    :class="props.embedded ? 'w-[320px] max-w-[86vw] bg-white shadow-[12px_0_40px_rgba(15,23,42,0.14)]' : 'w-[260px] bg-[#f9f9f9]'"
     :style="siderStyle"
   >
     <div class="flex flex-col h-full" :style="mobileSafeArea">
       <!-- Top row: OpenAI logo + sidebar toggle -->
       <div class="flex items-center justify-between h-[52px] px-3 flex-shrink-0">
         <!-- OpenAI logo -->
-        <div class="flex items-center justify-center w-9 h-9">
-          <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
-            <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.998 5.998 0 0 0-3.998 2.9 6.05 6.05 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.05 6.05 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v3.005l-2.607 1.5-2.602-1.5z" fill="#0d0d0d"/>
-          </svg>
+        <div class="flex items-center min-w-0">
+          <span v-if="props.embedded" class="px-1 text-sm font-semibold text-[#0d0d0d] truncate">聊天记录</span>
+          <div v-else class="flex items-center justify-center w-9 h-9">
+            <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
+              <path d="M22.282 9.821a5.985 5.985 0 0 0-.516-4.91 6.046 6.046 0 0 0-6.51-2.9A6.065 6.065 0 0 0 4.981 4.18a5.998 5.998 0 0 0-3.998 2.9 6.05 6.05 0 0 0 .743 7.097 5.98 5.98 0 0 0 .51 4.911 6.05 6.05 0 0 0 6.515 2.9A5.985 5.985 0 0 0 13.26 24a6.056 6.056 0 0 0 5.772-4.206 5.99 5.99 0 0 0 3.997-2.9 6.056 6.056 0 0 0-.747-7.073zM13.26 22.43a4.476 4.476 0 0 1-2.876-1.04l.141-.081 4.779-2.758a.795.795 0 0 0 .392-.681v-6.737l2.02 1.168a.071.071 0 0 1 .038.052v5.583a4.504 4.504 0 0 1-4.494 4.494zM3.6 18.304a4.47 4.47 0 0 1-.535-3.014l.142.085 4.783 2.759a.771.771 0 0 0 .78 0l5.843-3.369v2.332a.08.08 0 0 1-.033.062L9.74 19.95a4.5 4.5 0 0 1-6.14-1.646zM2.34 7.896a4.485 4.485 0 0 1 2.366-1.973V11.6a.766.766 0 0 0 .388.676l5.815 3.355-2.02 1.168a.076.076 0 0 1-.071 0l-4.83-2.786A4.504 4.504 0 0 1 2.34 7.872zm16.597 3.855l-5.833-3.387L15.119 7.2a.076.076 0 0 1 .071 0l4.83 2.791a4.494 4.494 0 0 1-.676 8.105v-5.678a.79.79 0 0 0-.407-.667zm2.01-3.023l-.141-.085-4.774-2.782a.776.776 0 0 0-.785 0L9.409 9.23V6.897a.066.066 0 0 1 .028-.061l4.83-2.787a4.5 4.5 0 0 1 6.68 4.66zm-12.64 4.135l-2.02-1.164a.08.08 0 0 1-.038-.057V6.075a4.5 4.5 0 0 1 7.375-3.453l-.142.08L8.704 5.46a.795.795 0 0 0-.393.681zm1.097-2.365l2.602-1.5 2.607 1.5v3.005l-2.607 1.5-2.602-1.5z" fill="#0d0d0d"/>
+            </svg>
+          </div>
         </div>
         <!-- Sidebar toggle -->
         <button
           class="flex items-center justify-center w-9 h-9 rounded-lg hover:bg-[#ececec] transition-colors text-[#0d0d0d]"
           @click="handleToggleSidebar"
         >
-          <Icon name="sidebar" :size="18" />
+          <Icon :name="props.embedded ? 'x' : 'sidebar'" :size="18" />
         </button>
       </div>
 
@@ -151,7 +164,7 @@ watch(
         <div class="px-3 mt-4 mb-1">
           <span class="text-xs font-semibold text-[#666] select-none">你的聊天</span>
         </div>
-        <List />
+        <List :embedded="props.embedded" />
       </div>
 
       <!-- Footer -->

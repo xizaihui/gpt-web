@@ -4,6 +4,7 @@ import { useRouter } from 'vue-router'
 import Sider from './sider/index.vue'
 import Permission from './Permission.vue'
 import { useBasicLayout } from '@/hooks/useBasicLayout'
+import { useEmbedMode } from '@/hooks/useEmbedMode'
 import { useAppStore, useAuthStore, useChatStore } from '@/store'
 
 const router = useRouter()
@@ -14,12 +15,18 @@ router.replace({ name: 'Chat', params: { uuid: chatStore.active } })
 const { isMobile } = useBasicLayout()
 const collapsed = computed(() => appStore.siderCollapsed)
 const needPermission = computed(() => !!authStore.session?.auth && !authStore.token)
+const { isEmbedMode } = useEmbedMode()
+const showSiderMask = computed(() => (isMobile.value || isEmbedMode.value) && !collapsed.value)
 </script>
 
 <template>
   <div class="h-full flex bg-white">
-    <Sider />
-    <div v-if="isMobile && !collapsed" class="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px]" @click="appStore.setSiderCollapsed(true)" />
+    <Sider :embedded="isEmbedMode" />
+    <div
+      v-if="showSiderMask"
+      class="fixed inset-0 z-40 bg-black/20 backdrop-blur-[2px]"
+      @click="appStore.setSiderCollapsed(true)"
+    />
     <div class="flex-1 flex flex-col h-full overflow-hidden">
       <RouterView v-slot="{ Component, route }">
         <component :is="Component" :key="route.fullPath" />

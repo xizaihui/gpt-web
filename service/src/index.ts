@@ -6,6 +6,7 @@ import { auth, adminAuth } from './middleware/auth'
 import { limiter } from './middleware/limiter'
 import { isNotEmptyString } from './utils/is'
 import * as storage from './storage'
+import { fetchNewApiSession, fetchNewApiTokenKey } from './newapi'
 import {
   listAccounts, getAccount, addAccount, removeAccount, updateAccount,
   syncFromOpenClaw, refreshAccount, refreshAllAccounts, getPoolStats,
@@ -97,7 +98,16 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
   res.flushHeaders()
 
   try {
-    const { prompt, options = {}, systemMessage, temperature, top_p, model, history, apiBaseUrl, apiKey, files, reasoning, chatUuid } = req.body as RequestProps & { apiBaseUrl?: string; apiKey?: string; reasoning?: string; chatUuid?: number }
+    const { prompt, options = {}, systemMessage, temperature, top_p, model, history, apiBaseUrl, apiKey, files, reasoning, chatUuid, newApiTokenId } = req.body as RequestProps & { apiBaseUrl?: string; apiKey?: string; reasoning?: string; chatUuid?: number; newApiTokenId?: number }
+    let resolvedApiBaseUrl = apiBaseUrl
+    let resolvedApiKey = apiKey
+    if (newApiTokenId) {
+      const newApiSession = (req as any).newApiSession || await fetchNewApiSession(req)
+      if (!newApiSession?.logged_in)
+        throw new Error('New API login session is unavailable')
+      resolvedApiBaseUrl = resolvedApiBaseUrl || newApiSession.base_url
+      resolvedApiKey = await fetchNewApiTokenKey(req, Number(newApiTokenId))
+    }
 
     const clientId = getClientId(req)
     // Per-chat session id: each chat window gets its own Claude conversation
@@ -120,8 +130,8 @@ router.post('/chat-process', [auth, limiter], async (req, res) => {
       top_p,
       model,
       history,
-      apiBaseUrl,
-      apiKey,
+      apiBaseUrl: resolvedApiBaseUrl,
+      apiKey: resolvedApiKey,
       files,
       reasoning,
       sessionId,
@@ -153,13 +163,37 @@ router.post('/config', auth, async (req, res) => {
 
 router.post('/session', async (req, res) => {
   try {
+    const newApiSession = await fetchNewApiSession(req)
+    if (newApiSession?.logged_in) {
+      res.send({
+        status: 'Success',
+        message: '',
+        data: {
+          auth: false,
+          model: currentModel(),
+          authMode: 'newapi',
+          newApi: newApiSession,
+        },
+      })
+      return
+    }
+
     const AUTH_SECRET_KEY = process.env.AUTH_SECRET_KEY
     const hasAuth = isNotEmptyString(AUTH_SECRET_KEY)
-    res.send({ status: 'Success', message: '', data: { auth: hasAuth, model: currentModel() } })
+    res.send({ status: 'Success', message: '', data: { auth: hasAuth, model: currentModel(), authMode: hasAuth ? 'secret' : 'none' } })
   }
   catch (error) {
     res.send({ status: 'Fail', message: (error as any).message, data: null })
   }
+})
+
+router.get('/newapi/session', auth, async (req, res) => {
+  const newApiSession = (req as any).newApiSession || await fetchNewApiSession(req)
+  if (!newApiSession?.logged_in) {
+    res.json({ status: 'Fail', message: 'New API session is unavailable', data: null })
+    return
+  }
+  res.json({ status: 'Success', data: newApiSession })
 })
 
 router.post('/verify', async (req, res) => {
@@ -182,6 +216,8 @@ router.post('/verify', async (req, res) => {
 
 /** Extract client ID from request header */
 function getClientId(req: any): string {
+  if (req.newApiUser?.id)
+    return `newapi:${req.newApiUser.id}`
   return (req.headers['x-client-id'] as string) || 'default'
 }
 

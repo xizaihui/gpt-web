@@ -20,10 +20,18 @@ declare namespace Chat {
 		// OpenAI cached tokens
 		prompt_tokens_details?: {
 			cached_tokens?: number
+			cached_creation_tokens?: number
+		}
+		input_tokens_details?: {
+			cached_tokens?: number
+			cached_creation_tokens?: number
 		}
 		// Anthropic cached tokens
 		cache_creation_input_tokens?: number
 		cache_read_input_tokens?: number
+		claude_cache_creation_5_m_tokens?: number
+		claude_cache_creation_1_h_tokens?: number
+		claude_cache_read_tokens?: number
 	}
 
 	interface History {

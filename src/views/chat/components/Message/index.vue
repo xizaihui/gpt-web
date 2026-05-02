@@ -72,6 +72,7 @@ const cachedTokens = computed(() => {
   const u = props.usage as any
   if (u.cache_read_input_tokens) return u.cache_read_input_tokens
   if (u.prompt_tokens_details?.cached_tokens) return u.prompt_tokens_details.cached_tokens
+  if (u.input_tokens_details?.cached_tokens) return u.input_tokens_details.cached_tokens
   if (u.claude_cache_read_tokens) return u.claude_cache_read_tokens
   return 0
 })
@@ -80,6 +81,8 @@ const cacheWriteTokens = computed(() => {
   if (!props.usage) return 0
   const u = props.usage as any
   if (u.cache_creation_input_tokens) return u.cache_creation_input_tokens
+  if (u.prompt_tokens_details?.cached_creation_tokens) return u.prompt_tokens_details.cached_creation_tokens
+  if (u.input_tokens_details?.cached_creation_tokens) return u.input_tokens_details.cached_creation_tokens
   const c5 = u.claude_cache_creation_5_m_tokens || 0
   const c1 = u.claude_cache_creation_1_h_tokens || 0
   return c5 + c1

@@ -7,10 +7,17 @@ import { useBasicLayout } from '@/hooks/useBasicLayout'
 
 const { isMobile } = useBasicLayout()
 
+const props = withDefaults(defineProps<{
+  embedded?: boolean
+}>(), {
+  embedded: false,
+})
+
 const appStore = useAppStore()
 const chatStore = useChatStore()
 
 const dataSources = computed(() => chatStore.history)
+const shouldCloseAfterAction = computed(() => isMobile.value || props.embedded)
 
 // Group chats: pinned first, then by time
 const groupedChats = computed(() => {
@@ -94,14 +101,17 @@ onUnmounted(() => {
 })
 
 async function handleSelect({ uuid }: Chat.History) {
-  if (isActive(uuid))
+  if (isActive(uuid)) {
+    if (shouldCloseAfterAction.value)
+      appStore.setSiderCollapsed(true)
     return
+  }
 
   if (chatStore.active)
     await chatStore.updateHistory(chatStore.active, { isEdit: false })
   await chatStore.setActive(uuid)
 
-  if (isMobile.value)
+  if (shouldCloseAfterAction.value)
     appStore.setSiderCollapsed(true)
 }
 
@@ -132,7 +142,7 @@ async function handleDelete(index: number, event?: MouseEvent) {
   event?.stopPropagation()
   closeMenu()
   await chatStore.deleteHistory(index)
-  if (isMobile.value)
+  if (shouldCloseAfterAction.value)
     appStore.setSiderCollapsed(true)
 }
 

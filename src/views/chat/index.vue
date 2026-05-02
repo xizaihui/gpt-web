@@ -10,8 +10,9 @@ import { useChat } from './hooks/useChat'
 import { useTextStreamer } from './hooks/useTextStreamer'
 import HeaderComponent from './components/Header/index.vue'
 import { useBasicLayout } from '@/hooks/useBasicLayout'
+import { useEmbedMode } from '@/hooks/useEmbedMode'
 import { useChatStore, useSettingStore, useAppStore } from '@/store'
-import { fetchChatAPIProcess } from '@/api'
+import { fetchChatAPIProcess, fetchNewApiSession } from '@/api'
 import { t } from '@/locales'
 
 let controller = new AbortController()
@@ -25,12 +26,14 @@ const appStore = useAppStore()
 const settingStore = useSettingStore()
 
 const { isMobile } = useBasicLayout()
+const { isEmbedMode } = useEmbedMode()
 const { addChat, updateChat, updateChatSome, getChatByUuidAndIndex } = useChat()
 const { scrollRef, scrollToBottom, scrollToBottomIfAtBottom } = useScroll()
 
 const { uuid } = route.params as { uuid: string }
 
 const dataSources = computed(() => chatStore.getChatByUuid(+uuid))
+const currentConversationTitle = computed(() => chatStore.getChatHistoryByCurrentActive?.title || t('chat.newChatTitle'))
 
 const prompt = ref<string>('')
 const loading = ref<boolean>(false)
@@ -159,11 +162,8 @@ function addToRecentFiles(file: { name: string; type: string; size: number; base
 
 const recentFiles = ref<RecentFile[]>(getRecentFiles())
 
-function handleFileSelect(event: Event) {
-  const input = event.target as HTMLInputElement
-  if (!input.files) return
-
-  for (const file of Array.from(input.files)) {
+function attachFiles(files: File[]) {
+  for (const file of files) {
     if (file.size > MAX_FILE_SIZE) {
       ms.warning(`文件 ${file.name} 超过 20MB 限制`)
       continue
@@ -188,9 +188,53 @@ function handleFileSelect(event: Event) {
     }
     reader.readAsDataURL(file)
   }
+}
+
+function handleFileSelect(event: Event) {
+  const input = event.target as HTMLInputElement
+  if (!input.files) return
+
+  attachFiles(Array.from(input.files))
 
   input.value = ''
   showAttachMenu.value = false
+}
+
+function getImageExtension(type: string) {
+  const subtype = type.split('/')[1]?.toLowerCase() || 'png'
+  if (subtype === 'jpeg') return 'jpg'
+  if (subtype === 'svg+xml') return 'svg'
+  return subtype.replace(/[^a-z0-9]/g, '') || 'png'
+}
+
+function getPastedImageName(file: File, index: number) {
+  const suffix = index > 0 ? `-${index + 1}` : ''
+  return `pasted-image-${Date.now()}${suffix}.${getImageExtension(file.type || 'image/png')}`
+}
+
+function handlePaste(event: ClipboardEvent) {
+  const clipboard = event.clipboardData
+  if (!clipboard) return
+
+  const imageFiles: File[] = []
+  for (const item of Array.from(clipboard.items)) {
+    if (item.kind !== 'file' || !item.type.startsWith('image/')) continue
+
+    const file = item.getAsFile()
+    if (!file) continue
+
+    imageFiles.push(new File([file], getPastedImageName(file, imageFiles.length), {
+      type: file.type || 'image/png',
+      lastModified: Date.now(),
+    }))
+  }
+
+  if (!imageFiles.length) return
+
+  event.preventDefault()
+  closeAttachMenu()
+  attachFiles(imageFiles)
+  scrollToBottomIfAtBottom()
 }
 
 async function attachRecentFile(file: RecentFile) {
@@ -589,7 +633,37 @@ function handleSuggestion(text: string) {
   handleSubmit()
 }
 
+function openConversationDrawer() {
+  appStore.setSiderCollapsed(false)
+}
+
+async function handleNewConversation() {
+  await chatStore.addHistory({ title: t('chat.newChatTitle'), uuid: Date.now(), isEdit: false })
+  if (isEmbedMode.value || isMobile.value)
+    appStore.setSiderCollapsed(true)
+}
+
+async function syncNewApiConfig() {
+  if (settingStore.apiMode === 'custom')
+    return
+  try {
+    const session = await fetchNewApiSession()
+    const enabledTokens = (session.tokens || []).filter(token => token.status === 1)
+    const selected = enabledTokens.find(token => token.id === settingStore.newApiTokenId) || enabledTokens[0]
+    settingStore.updateSetting({
+      apiMode: 'newapi',
+      apiBaseUrl: session.base_url || settingStore.apiBaseUrl,
+      newApiTokenId: selected?.id ?? null,
+      newApiTokenName: selected?.name ?? '',
+    })
+  }
+  catch {
+    // New API binding is optional when this page is opened standalone.
+  }
+}
+
 onMounted(async () => {
+  await syncNewApiConfig()
   // One-time migration from localStorage → backend SQLite
   await chatStore.migrateFromLocalStorage()
   // Load conversations list from backend
@@ -617,18 +691,35 @@ onUnmounted(() => {
 <template>
   <div class="flex flex-col w-full h-full bg-white">
     <!-- Top bar -->
-    <div class="flex items-center justify-between px-4 h-[52px] flex-shrink-0">
-      <div class="flex items-center gap-1">
+    <div
+      class="flex items-center justify-between h-[52px] flex-shrink-0"
+      :class="isEmbedMode ? 'px-3 sm:px-4 border-b border-[#f0f0f0] bg-white/95 backdrop-blur' : 'px-4'"
+    >
+      <div class="flex items-center gap-1 min-w-0">
         <!-- Sidebar toggle (show when sidebar is collapsed on desktop) -->
         <button
-          v-if="!isMobile && appStore.siderCollapsed"
+          v-if="isEmbedMode || (!isMobile && appStore.siderCollapsed)"
           class="icon-btn text-[#0d0d0d]"
-          @click="appStore.setSiderCollapsed(false)"
+          title="聊天记录"
+          @click="openConversationDrawer"
         >
           <Icon name="sidebar" :size="18" />
         </button>
+        <button
+          v-if="isEmbedMode"
+          class="icon-btn text-[#0d0d0d]"
+          title="新聊天"
+          @click="handleNewConversation"
+        >
+          <Icon name="pen-square" :size="18" />
+        </button>
         <!-- Mobile hamburger -->
-        <HeaderComponent v-if="isMobile" />
+        <HeaderComponent v-if="isMobile && !isEmbedMode" />
+        <div v-if="isEmbedMode" class="ml-2 min-w-0">
+          <div class="truncate text-sm font-medium text-[#0d0d0d]">
+            {{ currentConversationTitle }}
+          </div>
+        </div>
       </div>
     </div>
 
@@ -684,6 +775,7 @@ onUnmounted(() => {
                     style="height: 32px;"
                     @input="autoResize"
                     @keydown="handleEnter"
+                    @paste="handlePaste"
                   />
                 </div>
                 <!-- Bottom toolbar -->
@@ -848,6 +940,7 @@ onUnmounted(() => {
               style="height: 32px;"
               @input="autoResize"
               @keydown="handleEnter"
+              @paste="handlePaste"
             />
           </div>
 
